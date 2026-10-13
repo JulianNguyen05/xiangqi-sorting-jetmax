@@ -1,0 +1,18 @@
+# Dữ liệu và kết quả huấn luyện (nặng)
+data/
+runs/
+*.pt
+*.onnx
+*.engine
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# IDE / hệ thống
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
