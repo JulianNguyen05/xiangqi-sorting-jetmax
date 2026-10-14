@@ -1,9 +1,15 @@
-# Dữ liệu và kết quả huấn luyện (nặng)
-data/
-runs/
+# Dữ liệu và kết quả huấn luyện (nặng): giữ thư mục, bỏ nội dung
+data/*
+!data/.gitkeep
+runs/*
+!runs/.gitkeep
+
+# Trọng số mô hình: bỏ hết, trừ bản triển khai trong robot/models/
 *.pt
 *.onnx
 *.engine
+!robot/models/*.pt
+!robot/models/*.onnx
 
 # Python
 __pycache__/
