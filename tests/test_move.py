@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Chỉ đi ±20 mm theo x, y và lên theo z, không bao giờ xuống thấp hơn vị trí ban đầu.
+# Chỉ đi ±20 mm theo x, y, z từ vị trí ban đầu (z đi xuống 20 mm rồi lên lại).
 # Khi kết thúc hoặc bấm q, robot tự về chỗ cũ và tắt đầu hút.
 
 import rospy
@@ -28,7 +28,7 @@ print('Vị trí ban đầu x,y,z =', start)
 steps = [
     ('x +', (STEP, 0, 0)), ('x - (về)', (-STEP, 0, 0)),
     ('y +', (0, STEP, 0)), ('y - (về)', (0, -STEP, 0)),
-    ('z + (lên)', (0, 0, STEP)), ('z - (về)', (0, 0, -STEP)),
+    ('z - (xuống)', (0, 0, -STEP)), ('z + (về)', (0, 0, STEP)),
 ]
 try:
     for name, (dx, dy, dz) in steps:
