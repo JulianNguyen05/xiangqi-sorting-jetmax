@@ -1,0 +1,15 @@
+# Hiệu chuẩn bàn cờ. Đơn vị mm; slider tính bằng BƯỚC từ HOME của thanh trượt.
+# Quy ước ô: cột a..i từ trái sang phải nhìn từ phía quân ĐỎ, hàng 0 (phía đỏ) .. 9 (phía đen).
+#
+# Cách lấy số: chạy joint_teleop.py, đưa đầu hút tới TÂM giao điểm ở mỗi góc (đúng tâm quân cờ đặt ở góc đó),
+# bấm p để in slider/x/y rồi điền vào đây. Ở mỗi góc có thể dùng vị trí thanh trượt khác nhau,
+# miễn tay máy ở vùng với thoải mái (không sát biên).
+corners:
+  a0: {slider: null, x: null, y: null}   # góc đỏ bên trái
+  i0: {slider: null, x: null, y: null}   # góc đỏ bên phải
+  a9: {slider: null, x: null, y: null}   # góc đen bên trái
+  i9: {slider: null, x: null, y: null}   # góc đen bên phải
+
+z_pick: null    # z khi đầu hút chạm mặt quân cờ (giống --zpick trong pick_place.py)
+z_place: null   # z khi thả quân; để null thì = z_pick + 3
+z_safe: 50.0    # z khi di chuyển ngang (phải >= 40 để thanh trượt được phép chạy)
