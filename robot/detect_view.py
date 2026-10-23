@@ -195,8 +195,17 @@ def main():
         ms = (time.time() - t0) * 1000
         for d in dets:
             print('%-14s %.2f  (%d,%d,%d,%d)' % (det.names[int(d[5])], d[4], *d[:4]))
-        cv2.imshow(WIN, draw(img, dets, det.names, 0, ms))
-        cv2.waitKey(0)
+        print('%d quân, suy luận %.0f ms' % (len(dets), ms))
+        vis = draw(img, dets, det.names, 0, ms)
+        os.makedirs(os.path.expanduser(a.save_dir), exist_ok=True)
+        outp = os.path.join(os.path.expanduser(a.save_dir), 'det_' + os.path.basename(a.image))
+        cv2.imwrite(outp, vis)
+        print('Đã lưu ảnh kết quả:', outp)       # mở bằng trình xem ảnh nếu cửa sổ không hiện
+        try:
+            cv2.imshow(WIN, vis)
+            cv2.waitKey(0)
+        except cv2.error as e:
+            print('Không mở được cửa sổ hiển thị (%s)' % e)
         return
 
     import rospy
