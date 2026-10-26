@@ -6,46 +6,61 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.resolve()
 OUTPUT_FILE = PROJECT_ROOT / "gathered_code.md"
 
-# Định nghĩa danh sách các nhóm file theo yêu cầu
+# Định nghĩa danh sách các nhóm file cần thu thập
 GROUPS = [
     {
-        "name": "Nhóm 1: Camera & Thu thập hình ảnh",
+        "name": "Nhóm 1: Core Robot (Board, Detect View, Motion)",
         "patterns": [
-            "tests/camera_check.py",
-            "tests/capture_images.py",
-            "tests/capture_group.py",
-            "tests/scan_capture.py",
+            "robot/board.py",
+            "robot/detect_view.py",
+            "robot/motion.py",
         ],
     },
     {
-        "name": "Nhóm 2: Mô hình & Dữ liệu",
+        "name": "Nhóm 2: Cấu hình hệ thống (Configs)",
+        "patterns": [
+            "configs/board.yaml",
+        ],
+    },
+    {
+        "name": "Nhóm 3: Test Scripts & Kịch bản thử nghiệm",
+        "patterns": [
+            "tests/move_piece.py",
+            "tests/pick_place.py",
+            "tests/scan_detect.py",
+        ],
+    },
+    {
+        "name": "Nhóm 4: Huấn luyện, Cấu trúc Class & Dataset",
         "patterns": [
             "training/README.md",
             "training/build_dataset.ipynb",
             "training/train_yolo11.ipynb",
-            "**/data.yaml",
-            "runs/**/results.csv",
-            "robot/models/*",
         ],
     },
     {
-        "name": "Nhóm 3: Nhận diện & Điều khiển gắp (Kinematics, Calibration & Pick-Place)",
+        "name": "Nhóm 5: Cấu hình danh sách Class & Dataset Config",
         "patterns": [
-            "tests/pick_place.py",
-            "docs/robot-reference/waste_classification_stepper.py",
-            "tests/analyze_images.py",
-            "reference/hiwonder/**/*",
+            "**/data.yaml",
+            "data.yaml",
         ],
     },
     {
-        "name": "Nhóm 4: Tổng quan dự án",
+        "name": "Nhóm 6: Reference Scripts & API mẫu",
+        "patterns": [
+            "docs/robot-reference/waste_classification_stepper.py",
+            "docs/robot-reference/jetmax_control/scripts/jetmax_control_main.py",
+        ],
+    },
+    {
+        "name": "Nhóm 7: Tổng quan dự án",
         "patterns": [
             "README.md",
         ],
     },
 ]
 
-# Các định dạng file trọng số mô hình (chỉ lấy thông tin tên và kích thước, không đọc nội dung)
+# Các định dạng file trọng số mô hình (chỉ lấy thông tin tên và kích thước)
 WEIGHTS_EXTENSIONS = {".pt", ".onnx", ".engine", ".pth", ".weights", ".tflite", ".bin", ".pkl"}
 
 
@@ -165,18 +180,15 @@ def main():
 
                 out.write(f"### `{rel_path}`\n\n")
 
-                # Xử lý file Weights / Model nhị phân
                 if ext in WEIGHTS_EXTENSIONS:
                     out.write(f"- **Loại file:** Model Weights ({ext})\n")
                     out.write(f"- **Kích thước file:** {size_str}\n")
                     out.write("> ℹ️ *Nội dung file nhị phân được bỏ qua.* \n\n")
-                # Xử lý Jupyter Notebook
                 elif ext == ".ipynb":
                     out.write(f"*File Jupyter Notebook | Dung lượng: {size_str}*\n\n")
                     nb_content = render_notebook(file_path)
                     out.write(nb_content)
                     out.write("\n\n")
-                # Xử lý file văn bản thông thường
                 else:
                     lang = get_language_tag(file_path)
                     try:

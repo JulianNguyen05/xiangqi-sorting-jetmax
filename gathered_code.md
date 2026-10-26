@@ -1,363 +1,359 @@
 # GATHERED SOURCE CODE - XIANGQI SORTING JETMAX
 
 - **Thư mục gốc:** `D:\2026_2027\Chuyen-de\xiangqi-sorting-jetmax`
-- **Tổng số file đã gôm:** 14
+- **Tổng số file đã gôm:** 13
 
 ## Mục lục
 
-### Nhóm 1: Camera & Thu thập hình ảnh
-- [tests\camera_check.py](#testscamera_checkpy)
-- [tests\capture_images.py](#testscapture_imagespy)
-- [tests\capture_group.py](#testscapture_grouppy)
-- [tests\scan_capture.py](#testsscan_capturepy)
+### Nhóm 1: Core Robot (Board, Detect View, Motion)
+- [robot\board.py](#robotboardpy)
+- [robot\detect_view.py](#robotdetect_viewpy)
+- [robot\motion.py](#robotmotionpy)
 
-### Nhóm 2: Mô hình & Dữ liệu
+### Nhóm 2: Cấu hình hệ thống (Configs)
+- [configs\board.yaml](#configsboardyaml)
+
+### Nhóm 3: Test Scripts & Kịch bản thử nghiệm
+- [tests\move_piece.py](#testsmove_piecepy)
+- [tests\pick_place.py](#testspick_placepy)
+- [tests\scan_detect.py](#testsscan_detectpy)
+
+### Nhóm 4: Huấn luyện, Cấu trúc Class & Dataset
 - [training\README.md](#trainingreadmemd)
 - [training\build_dataset.ipynb](#trainingbuild_datasetipynb)
 - [training\train_yolo11.ipynb](#trainingtrain_yolo11ipynb)
-- [runs\yolo11n_640\results.csv](#runsyolo11n_640resultscsv)
-- [robot\models\best.onnx](#robotmodelsbestonnx)
-- [robot\models\best.pt](#robotmodelsbestpt)
 
-### Nhóm 3: Nhận diện & Điều khiển gắp (Kinematics, Calibration & Pick-Place)
-- [tests\pick_place.py](#testspick_placepy)
+### Nhóm 5: Cấu hình danh sách Class & Dataset Config
+  *(Không tìm thấy file nào)*
+
+### Nhóm 6: Reference Scripts & API mẫu
 - [docs\robot-reference\waste_classification_stepper.py](#docsrobot-referencewaste_classification_stepperpy)
-- [tests\analyze_images.py](#testsanalyze_imagespy)
+- [docs\robot-reference\jetmax_control\scripts\jetmax_control_main.py](#docsrobot-referencejetmax_controlscriptsjetmax_control_mainpy)
 
-### Nhóm 4: Tổng quan dự án
+### Nhóm 7: Tổng quan dự án
 - [README.md](#readmemd)
 
 ---
 
-## Nhóm 1: Camera & Thu thập hình ảnh
+## Nhóm 1: Core Robot (Board, Detect View, Motion)
 
-### `tests\camera_check.py`
+### `robot\board.py`
 
-*Dung lượng: 2.84 KB | Số dòng: 64*
+*Dung lượng: 2.65 KB | Số dòng: 58*
 
 ```python
 #!/usr/bin/env python3
-# Kiểm tra camera JetMax khi đang chạy (chạy trên JetMax, cần node camera /usb_cam đang bật):
-#   python3 camera_check.py            # đo 10 giây
-#   python3 camera_check.py --secs 20
+# Bàn cờ tướng: tên ô <-> chỉ số, và ánh xạ ô cờ -> (thanh trượt, x, y) của robot từ 4 góc đã dạy.
+# Thuần Python, không cần ROS, chạy thử được trên laptop.
 #
-# Đo: độ phân giải, FPS thực, khoảng cách lớn nhất giữa hai khung (giật hình), độ trôi độ sáng
-# (tự động phơi sáng/đèn nhấp nháy), nhiễu theo thời gian (độ lệch chuẩn từng điểm ảnh qua các khung).
-# Hãy để CẢNH TĨNH (băng chuyền dừng, không có vật chuyển động) trong lúc đo để số liệu có nghĩa.
+# Quy ước ô (giống UCCI, ví dụ "h2e2" = pháo đỏ ở h2 đi tới e2):
+#   cột a..i từ TRÁI sang PHẢI nhìn từ phía quân ĐỎ; hàng 0..9 từ phía đỏ (hàng 0) lên phía đen (hàng 9).
+#
+#   hàng 9   a9 b9 c9 d9 e9 f9 g9 h9 i9     (phía đen)
+#   ...
+#   hàng 0   a0 b0 c0 d0 e0 f0 g0 h0 i0     (phía đỏ)
+#
+# Cách ánh xạ: dạy 4 góc a0, i0, a9, i9 (mỗi góc gồm vị trí thanh trượt + x + y của tay máy), rồi nội suy song tuyến
+# cho cả ba giá trị. Vị trí robot là hàm tuyến tính của (thanh trượt, x, y) nên cách này đúng khi bàn cờ là hình chữ nhật
+# và thanh trượt chạy thẳng. Không cần biết bước/mm hay hướng trượt.
 
-import argparse, time
-import numpy as np
-import rospy
-from sensor_msgs.msg import Image
-
-TOPIC = '/usb_cam/image_rect_color'
-frames, stamps, means, arrival = [], [], [], []
-info = {}
-
-
-def on_image(msg):
-    info['w'], info['h'], info['enc'] = msg.width, msg.height, msg.encoding
-    img = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3)
-    gray = img.mean(axis=2)
-    means.append(float(gray.mean()))
-    stamps.append(msg.header.stamp.to_sec())
-    arrival.append(time.time())
-    if len(frames) < 30 and len(means) % 3 == 0:
-        frames.append(gray.astype(np.float32))
+FILES = 'abcdefghi'
+NF, NR = 9, 10
+CORNERS = ('a0', 'i0', 'a9', 'i9')
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--secs', type=float, default=10)
-    a = ap.parse_args()
-    rospy.init_node('camera_check')
-    rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
-    print('Đang đo %.0f giây từ %s (giữ cảnh tĩnh)...' % (a.secs, TOPIC))
-    t0 = time.time()
-    while time.time() - t0 < a.secs and not rospy.is_shutdown():
-        time.sleep(0.05)
-    if len(arrival) < 5:
-        print('Gần như không nhận được ảnh. Kiểm tra: rostopic list | grep usb_cam')
-        return
-
-    dt = np.diff(arrival)
-    fps = (len(arrival) - 1) / (arrival[-1] - arrival[0])
-    print('Độ phân giải: %dx%d, mã hóa: %s' % (info['w'], info['h'], info['enc']))
-    print('FPS thực nhận được: %.1f   (khoảng cách khung lớn nhất: %.0f ms)' % (fps, dt.max() * 1000))
-    m = np.array(means)
-    print('Độ sáng trung bình: %.1f, độ lệch chuẩn theo thời gian: %.2f, dao động max-min: %.1f' % (
-        m.mean(), m.std(), m.max() - m.min()))
-    if m.max() - m.min() > 6:
-        print('  -> Độ sáng dao động đáng kể: có thể do tự động phơi sáng hoặc đèn nhấp nháy.')
-    if len(frames) >= 5:
-        tn = float(np.mean(np.std(np.stack(frames), axis=0)))
-        print('Nhiễu theo thời gian (độ lệch chuẩn mỗi điểm ảnh): %.2f mức xám' % tn)
-        if tn > 4:
-            print('  -> Nhiễu cao: kiểm tra ánh sáng, độ lợi (gain) của camera.')
-    if fps < 15:
-        print('  -> FPS thấp: băng chuyền nhanh sẽ khó bám vật; cân nhắc giảm độ phân giải hoặc tắt hiển thị.')
+def parse_square(s):
+    s = s.strip().lower()
+    if len(s) != 2 or s[0] not in FILES or not s[1].isdigit():
+        raise ValueError('Ô "%s" không hợp lệ (cột a-i, hàng 0-9, ví dụ h2)' % s)
+    return FILES.index(s[0]), int(s[1])
 
 
-if __name__ == '__main__':
-    main()
+def square_name(f, r):
+    return '%s%d' % (FILES[f], r)
+
+
+class Board:
+    def __init__(self, corners, z_pick, z_safe=50.0, z_place=None):
+        miss = [c for c in CORNERS if c not in corners or any(v is None for v in corners[c])]
+        if miss:
+            raise ValueError('Chưa điền góc: %s (slider, x, y)' % ', '.join(miss))
+        if z_pick is None:
+            raise ValueError('Chưa điền z_pick')
+        self.c = {k: tuple(float(v) for v in corners[k]) for k in CORNERS}
+        self.z_pick = float(z_pick)
+        self.z_safe = float(z_safe)
+        self.z_place = float(z_place) if z_place is not None else self.z_pick + 3.0
+
+    @classmethod
+    def load(cls, path):
+        import yaml
+        with open(path) as f:
+            d = yaml.safe_load(f)
+        corners = {k: (v.get('slider'), v.get('x'), v.get('y')) for k, v in (d.get('corners') or {}).items()}
+        return cls(corners, d.get('z_pick'), d.get('z_safe', 50.0), d.get('z_place'))
+
+    def position(self, sq):
+        """Ô cờ (tên 'h2' hoặc (cột, hàng)) -> (slider:int, x, y) tại tâm giao điểm."""
+        f, r = parse_square(sq) if isinstance(sq, str) else sq
+        u, v = f / float(NF - 1), r / float(NR - 1)
+        w = ((1 - u) * (1 - v), u * (1 - v), (1 - u) * v, u * v)
+        p = [sum(w[i] * self.c[CORNERS[i]][k] for i in range(4)) for k in range(3)]
+        return int(round(p[0])), round(p[1], 1), round(p[2], 1)
 ```
 
 ---
 
-### `tests\capture_images.py`
+### `robot\detect_view.py`
 
-*Dung lượng: 1.85 KB | Số dòng: 56*
-
-```python
-#!/usr/bin/env python3
-
-# Bấm phím cách để lưu, q để thoát. Ảnh lưu vào ~/capture/,
-# mỗi lần lưu ghi thêm một dòng vào positions.csv (tên file, x, y, z).
-
-import os, time, csv
-import cv2, numpy as np, rospy
-from sensor_msgs.msg import Image
-from jetmax_control.msg import JetMax
-
-TOPIC = '/usb_cam/image_rect_color'
-OUT = os.path.expanduser('~/capture')
-os.makedirs(OUT, exist_ok=True)
-state = {'img': None, 'pos': (0.0, 0.0, 0.0)}
-
-def on_image(msg):
-    state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()  # RGB
-
-def on_status(msg):
-    state['pos'] = (msg.x, msg.y, msg.z)
-
-rospy.init_node('capture_images')
-rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
-rospy.Subscriber('/jetmax/status', JetMax, on_status, queue_size=1)
-
-csv_path = os.path.join(OUT, 'positions.csv')
-is_new = not os.path.exists(csv_path)
-f = open(csv_path, 'a', newline='')
-w = csv.writer(f)
-if is_new:
-    w.writerow(['file', 'x', 'y', 'z'])
-
-n, t0 = 0, time.time()
-print('Space = lưu ảnh, q = thoát')
-while not rospy.is_shutdown():
-    if state['img'] is None:
-        if time.time() - t0 > 5:
-            print('Chưa nhận được ảnh từ', TOPIC, '- kiểm tra rostopic list')
-            t0 = time.time()
-        time.sleep(0.05)
-        continue
-    bgr = cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)
-    show = bgr.copy()
-    cv2.putText(show, 'saved: %d' % n, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-    cv2.imshow('capture', show)
-    k = cv2.waitKey(30) & 0xFF
-    if k == ord(' '):
-        name = '%d.jpg' % int(time.time() * 1000)
-        cv2.imwrite(os.path.join(OUT, name), bgr)
-        w.writerow([name] + ['%.1f' % v for v in state['pos']])
-        f.flush()
-        n += 1
-    elif k == ord('q'):
-        break
-f.close()
-cv2.destroyAllWindows()
-```
-
----
-
-### `tests\capture_group.py`
-
-*Dung lượng: 9.04 KB | Số dòng: 188*
+*Dung lượng: 11.09 KB | Số dòng: 249*
 
 ```python
 #!/usr/bin/env python3
-# Chụp ảnh theo NHÓM điều kiện để phân tích chất lượng ảnh (dùng chung với analyze_images.py).
-# Chạy trên JetMax, cần node jetmax_control (nếu dùng --pose) và camera đang bật.
+# Hiển thị nhận diện quân cờ (YOLO11) từ camera JetMax. CHƯA điều khiển tay máy, chỉ vẽ khung + tên + độ tin cậy.
+# Cần: node usb_cam đang chạy (topic ảnh RGB). Không cần node jetmax_control.
 #
 # Ví dụ:
-#   python3 capture_group.py static                              # chụp không giới hạn số ảnh, dừng bằng q/Esc
-#   python3 capture_group.py static --n 15                       # hoặc đặt số ảnh tối đa
-#   python3 capture_group.py belt_mid --n 30 --interval 0.5      # băng chuyền chạy, tự chụp mỗi 0.5 giây
-#   python3 capture_group.py static --pose 0 -200 80             # đổi điểm chụp (mặc định: DEFAULT_POSE)
-#   python3 capture_group.py static --no-move                    # không đưa tay máy đi đâu, chụp tại chỗ
+#   python3 detect_view.py --model ~/models/best.pt                 # dùng ultralytics (nếu cài được trên robot)
+#   python3 detect_view.py --model ~/models/best.onnx               # onnxruntime nếu có, không thì cv2.dnn (OpenCV cũ không chạy được YOLO11)
+#   python3 detect_view.py --model ~/models/best.engine             # TensorRT (tạo bằng trtexec trên robot)
+#   python3 detect_view.py --model ~/models/best.onnx --image a.jpg # thử trên ảnh tĩnh, không cần ROS
+#   python3 detect_view.py --model ~/models/best.onnx --conf 0.4 --save-dir ~/detect_out
 #
-# Ảnh lưu ở ~/capture_scan/<nhóm>/ . Sau đó: python3 analyze_images.py ~/capture_scan
-#
-# Mặc định script khóa phơi sáng và cân bằng trắng của camera cho cả buổi chụp (tắt bằng --no-lock).
-# Thông số cũ vẫn trả lại khi chạy:  v4l2-ctl -d /dev/video0 --set-ctrl=exposure_auto=3
-#                                    v4l2-ctl -d /dev/video0 --set-ctrl=white_balance_temperature_auto=1
+# Phím: q / Esc = thoát, s = lưu khung hình đã vẽ vào --save-dir.
 
-import os, time, argparse, subprocess
+import os, time, argparse
 import cv2
 import numpy as np
-import rospy
-from sensor_msgs.msg import Image
 
 TOPIC = '/usb_cam/image_rect_color'
-ROOT = os.path.expanduser('~/capture_scan')
-DEV = '/dev/video0'
-DEFAULT_POSE = (0.0, -220.4, 50.3)      # điểm chụp đã chọn bằng joint_teleop.py
-WIN = 'capture_group (Space/Enter = chup, q/Esc = dung)'
-X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0   # giống scan_capture.py
-
-state = {'img': None, 'n': 0}
+IMGSZ = 640
+# Thứ tự lớp theo build_dataset.ipynb (id 0-6 = black, 7-13 = red). Với .pt thì lấy tên ngay trong mô hình.
+NAMES = ['%s_%s' % (c, p) for c in ('black', 'red')
+         for p in ('advisor', 'bishop', 'cannon', 'king', 'knight', 'pawn', 'rook')]
+WIN = 'detect_view (q/Esc = thoat, s = luu)'
 
 
-def on_image(msg):
-    state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()
-    state['n'] += 1
+# ---------------------------------------------------------------- backend ----
+class TorchBackend:
+    """Ultralytics + best.pt. Nhận ảnh BGR, trả về mảng Nx6: x1 y1 x2 y2 conf cls."""
+
+    def __init__(self, path, conf, iou):
+        from ultralytics import YOLO
+        self.m, self.conf, self.iou = YOLO(path), conf, iou
+        self.names = [self.m.names[i] for i in sorted(self.m.names)]
+
+    def __call__(self, bgr):
+        r = self.m.predict(bgr, imgsz=IMGSZ, conf=self.conf, iou=self.iou, verbose=False)[0]
+        if len(r.boxes) == 0:
+            return np.zeros((0, 6), np.float32)
+        b = r.boxes
+        return np.hstack([b.xyxy.cpu().numpy(), b.conf.cpu().numpy()[:, None],
+                          b.cls.cpu().numpy()[:, None]]).astype(np.float32)
 
 
-def v4l2(ctrl):
-    r = subprocess.run(['v4l2-ctl', '-d', DEV, '--set-ctrl=' + ctrl],
-                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-    if r.returncode != 0:
-        print('  Không đặt được %s: %s' % (ctrl, r.stderr.strip()))
-
-
-def lock_camera(exposure, wb):
-    print('Khóa camera: phơi sáng thủ công = %d, cân bằng trắng = %d K' % (exposure, wb))
-    v4l2('exposure_auto=1')                    # phải sang thủ công trước khi đặt giá trị
-    v4l2('exposure_absolute=%d' % exposure)
-    v4l2('white_balance_temperature_auto=0')
-    v4l2('white_balance_temperature=%d' % wb)
-    time.sleep(1.0)                            # chờ camera ổn định
-
-
-def grab():
-    t0 = time.time()
-    n0 = state['n']
-    while state['n'] < n0 + 2:                 # đợi khung hình mới
-        if time.time() - t0 > 3:
-            raise RuntimeError('Không nhận được ảnh từ ' + TOPIC)
-        time.sleep(0.01)
-    return cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)
-
-
-def preview(rgb, group, saved, total, extra=''):
-    """Hiện ảnh trực tiếp kèm tâm ngắm và số đo độ nét/độ sáng (chữ không dấu vì font OpenCV). Trả về phím bấm."""
-    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+def preprocess(bgr):
+    """Letterbox giống Ultralytics -> blob (1,3,640,640) RGB float32 + tham số để đổi toạ độ về ảnh gốc."""
     h, w = bgr.shape[:2]
-    gray = cv2.cvtColor(bgr[h // 4: 3 * h // 4, w // 4: 3 * w // 4], cv2.COLOR_BGR2GRAY)
-    sharp = cv2.Laplacian(gray, cv2.CV_64F).var()       # tính ở vùng giữa ảnh; càng cao càng nét
-    vis = bgr.copy()
-    cv2.line(vis, (w // 2, 0), (w // 2, h), (0, 255, 0), 1)
-    cv2.line(vis, (0, h // 2), (w, h // 2), (0, 255, 0), 1)
-    cv2.rectangle(vis, (w // 4, h // 4), (3 * w // 4, 3 * h // 4), (0, 255, 255), 1)   # vùng đo độ nét
-    label = '%s  %d/%d' % (group, saved, total) if total > 0 else '%s  %d' % (group, saved)
-    cv2.putText(vis, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-    cv2.putText(vis, 'Sharp %.0f  Bright %.0f' % (sharp, bgr.mean()), (10, 55),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.putText(vis, extra, (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 200, 0), 2)
-    cv2.imshow(WIN, vis)
-    return cv2.waitKey(30) & 0xFF
+    r = min(IMGSZ / h, IMGSZ / w)
+    nh, nw = int(round(h * r)), int(round(w * r))
+    top, left = (IMGSZ - nh) // 2, (IMGSZ - nw) // 2
+    canvas = np.full((IMGSZ, IMGSZ, 3), 114, np.uint8)
+    canvas[top:top + nh, left:left + nw] = cv2.resize(bgr, (nw, nh), interpolation=cv2.INTER_LINEAR)
+    blob = cv2.dnn.blobFromImage(canvas, 1 / 255.0, (IMGSZ, IMGSZ), swapRB=True)   # BGR -> RGB
+    return blob, (r, left, top, w, h)
 
 
-def go_pose(x, y, z):
-    if not (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
-            and (x * x + y * y) ** 0.5 >= R_MIN):
-        raise SystemExit('Pose (%.1f, %.1f, %.1f) ngoài giới hạn an toàn, không đi.' % (x, y, z))
-    from jetmax_control.msg import SetJetMax
-    pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
-    rospy.sleep(1.0)
-    pub.publish(SetJetMax(x=x, y=y, z=z, duration=2.0))
-    rospy.sleep(2.7)
+def postprocess(out, meta, conf_thr, iou_thr):
+    """Đầu ra YOLO11 (1, 4+nc, 8400) -> mảng Nx6: x1 y1 x2 y2 conf cls (toạ độ ảnh gốc), đã NMS theo lớp."""
+    r, left, top, w, h = meta
+    p = np.asarray(out).reshape(1, -1, out.shape[-1])[0].T if np.ndim(out) == 3 else np.asarray(out).T
+    scores = p[:, 4:]
+    cls = scores.argmax(1)
+    conf = scores[np.arange(len(p)), cls]
+    keep = conf >= conf_thr
+    p, cls, conf = p[keep], cls[keep], conf[keep]
+    if len(p) == 0:
+        return np.zeros((0, 6), np.float32)
+    cx, cy, bw, bh = p[:, 0], p[:, 1], p[:, 2], p[:, 3]
+    x1, y1 = (cx - bw / 2 - left) / r, (cy - bh / 2 - top) / r
+    x2, y2 = (cx + bw / 2 - left) / r, (cy + bh / 2 - top) / r
+    boxes = np.stack([x1, y1, x2, y2], 1)
+    off = cls[:, None] * 4096.0                             # NMS theo từng lớp
+    xywh = np.stack([x1, y1, x2 - x1, y2 - y1], 1) + np.hstack([off, off, 0 * off, 0 * off])
+    idx = cv2.dnn.NMSBoxes(xywh.tolist(), conf.tolist(), conf_thr, iou_thr)
+    idx = np.array(idx).reshape(-1).astype(int)
+    boxes = np.clip(boxes[idx], 0, [w, h, w, h])
+    return np.hstack([boxes, conf[idx, None], cls[idx, None]]).astype(np.float32)
 
 
+class OnnxBackend:
+    """best.onnx qua onnxruntime (nếu có) hoặc cv2.dnn. Lưu ý: cv2.dnn của OpenCV cũ (4.5.x) không chạy được YOLO11."""
+
+    def __init__(self, path, conf, iou):
+        self.conf, self.iou, self.names = conf, iou, NAMES
+        self.ort = None
+        try:
+            import onnxruntime as ort
+            prov = [p for p in ('CUDAExecutionProvider', 'CPUExecutionProvider')
+                    if p in ort.get_available_providers()]
+            self.ort = ort.InferenceSession(path, providers=prov)
+            self.inp = self.ort.get_inputs()[0].name
+            print('Backend: onnxruntime', prov)
+        except ImportError:
+            self.net = cv2.dnn.readNetFromONNX(path)
+            print('Backend: cv2.dnn (OpenCV %s)' % cv2.__version__)
+
+    def __call__(self, bgr):
+        blob, meta = preprocess(bgr)
+        if self.ort is not None:
+            out = self.ort.run(None, {self.inp: blob})[0]
+        else:
+            self.net.setInput(blob)
+            out = self.net.forward()
+        return postprocess(out, meta, self.conf, self.iou)
+
+
+class TrtBackend:
+    """TensorRT engine (.engine/.trt) tạo bằng trtexec ngay trên robot. Cần python3 có tensorrt và pycuda (Hiwonder đã cài)."""
+
+    def __init__(self, path, conf, iou):
+        import tensorrt as trt
+        import pycuda.autoinit            # noqa: F401  (tạo CUDA context)
+        import pycuda.driver as cuda
+        self.cuda, self.conf, self.iou, self.names = cuda, conf, iou, NAMES
+        with open(path, 'rb') as f, trt.Runtime(trt.Logger(trt.Logger.WARNING)) as rt:
+            self.engine = rt.deserialize_cuda_engine(f.read())
+        if self.engine is None:
+            raise RuntimeError('Không nạp được engine (tạo trên robot này, cùng phiên bản TensorRT chưa?)')
+        self.ctx = self.engine.create_execution_context()
+        self.stream = cuda.Stream()
+        self.bindings, self.h_in, self.d_in, self.h_out, self.d_out = [], None, None, None, None
+        for i in range(self.engine.num_bindings):
+            shape = tuple(self.engine.get_binding_shape(i))
+            dtype = trt.nptype(self.engine.get_binding_dtype(i))
+            host = cuda.pagelocked_empty(int(trt.volume(shape)), dtype)
+            dev = cuda.mem_alloc(host.nbytes)
+            self.bindings.append(int(dev))
+            if self.engine.binding_is_input(i):
+                self.h_in, self.d_in = host, dev
+            else:
+                self.h_out, self.d_out, self.out_shape = host, dev, shape
+        print('Backend: TensorRT, đầu ra', self.out_shape)
+
+    def __call__(self, bgr):
+        blob, meta = preprocess(bgr)
+        self.h_in[:] = blob.ravel().astype(self.h_in.dtype)
+        self.cuda.memcpy_htod_async(self.d_in, self.h_in, self.stream)
+        self.ctx.execute_async_v2(self.bindings, self.stream.handle)
+        self.cuda.memcpy_dtoh_async(self.h_out, self.d_out, self.stream)
+        self.stream.synchronize()
+        out = self.h_out.reshape(self.out_shape).astype(np.float32)
+        return postprocess(out, meta, self.conf, self.iou)
+
+
+def load_backend(path, conf, iou):
+    low = path.lower()
+    if low.endswith('.pt'):
+        return TorchBackend(path, conf, iou)
+    if low.endswith('.engine') or low.endswith('.trt'):
+        return TrtBackend(path, conf, iou)
+    return OnnxBackend(path, conf, iou)
+
+
+# ------------------------------------------------------------------- vẽ ------
+def draw(bgr, dets, names, fps, ms):
+    for x1, y1, x2, y2, c, k in dets:
+        k = int(k)
+        name = names[k] if k < len(names) else str(k)
+        col = (0, 0, 255) if name.startswith('red') else (255, 255, 0)   # BGR: đỏ / vàng-xanh cho quân đen
+        p1, p2 = (int(x1), int(y1)), (int(x2), int(y2))
+        cv2.rectangle(bgr, p1, p2, col, 2)
+        label = '%s %.2f' % (name, c)
+        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(bgr, (p1[0], p1[1] - th - 6), (p1[0] + tw + 4, p1[1]), col, -1)
+        cv2.putText(bgr, label, (p1[0] + 2, p1[1] - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    cv2.putText(bgr, 'FPS %.1f  infer %.0f ms  quan %d' % (fps, ms, len(dets)), (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    return bgr
+
+
+def save(img, d):
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, 'det_%d.jpg' % int(time.time() * 1000))
+    cv2.imwrite(p, img)
+    print('đã lưu', p)
+
+
+# ------------------------------------------------------------------ main -----
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('group', help='tên nhóm/thư mục, ví dụ static, belt_slow, belt_mid, belt_fast')
-    ap.add_argument('--n', type=int, default=0, help='số ảnh tối đa; 0 (mặc định) = không giới hạn, dừng bằng q/Esc hoặc Ctrl+C')
-    ap.add_argument('--interval', type=float, default=0, help='>0: tự chụp mỗi N giây; 0: bấm Enter mỗi ảnh')
-    ap.add_argument('--pose', type=float, nargs=3, metavar=('X', 'Y', 'Z'), default=list(DEFAULT_POSE),
-                    help='điểm chụp của tay máy (mặc định %s)' % (DEFAULT_POSE,))
-    ap.add_argument('--no-move', action='store_true', help='không di chuyển tay máy, chụp tại vị trí hiện tại')
-    ap.add_argument('--exposure', type=int, default=60, help='exposure_absolute (đơn vị phụ thuộc camera)')
-    ap.add_argument('--wb', type=int, default=4000, help='nhiệt độ màu cân bằng trắng (K)')
-    ap.add_argument('--no-preview', action='store_true', help='không mở cửa sổ xem trước, chụp bằng dòng lệnh')
-    ap.add_argument('--no-lock', action='store_true', help='không khóa phơi sáng/cân bằng trắng')
+    ap.add_argument('--model', required=True, help='đường dẫn best.pt hoặc best.onnx')
+    ap.add_argument('--conf', type=float, default=0.5)
+    ap.add_argument('--iou', type=float, default=0.45)
+    ap.add_argument('--image', help='chạy trên một ảnh tĩnh (BGR, jpg/png) thay vì camera')
+    ap.add_argument('--save-dir', default=os.path.expanduser('~/detect_out'))
     a = ap.parse_args()
 
-    rospy.init_node('capture_group')
-    rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
-    if not a.no_lock:
-        lock_camera(a.exposure, a.wb)
-    if not a.no_move:
-        print('Đưa tay máy tới (%.1f, %.1f, %.1f), hãy chắc đường đi không vướng vật cản...' % tuple(a.pose))
-        go_pose(*a.pose)
-    rospy.sleep(0.5)
+    det = load_backend(os.path.expanduser(a.model), a.conf, a.iou)
 
-    out = os.path.join(ROOT, a.group)
-    os.makedirs(out, exist_ok=True)
-    start = len([f for f in os.listdir(out) if f.lower().endswith('.jpg')])
-    print('Lưu vào %s (đã có %d ảnh)' % (out, start))
-
-    gui = not a.no_preview and bool(os.environ.get('DISPLAY'))
-    if gui:
+    if a.image:
+        img = cv2.imread(os.path.expanduser(a.image))
+        if img is None:
+            raise SystemExit('Không đọc được ảnh: %s (kiểm tra đường dẫn đầy đủ)' % a.image)
+        t0 = time.time()
+        dets = det(img)
+        ms = (time.time() - t0) * 1000
+        for d in dets:
+            print('%-14s %.2f  (%d,%d,%d,%d)' % (det.names[int(d[5])], d[4], *d[:4]))
+        print('%d quân, suy luận %.0f ms' % (len(dets), ms))
+        vis = draw(img, dets, det.names, 0, ms)
+        os.makedirs(os.path.expanduser(a.save_dir), exist_ok=True)
+        outp = os.path.join(os.path.expanduser(a.save_dir), 'det_' + os.path.basename(a.image))
+        cv2.imwrite(outp, vis)
+        print('Đã lưu ảnh kết quả:', outp)       # mở bằng trình xem ảnh nếu cửa sổ không hiện
         try:
-            cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
-        except cv2.error:
-            gui = False
-    if gui:
-        print('Cửa sổ xem trước đã mở: Space/Enter = chụp, q/Esc = dừng.')
-        print('Chỉnh trực tiếp: [ ] = giảm/tăng phơi sáng, , . = giảm/tăng nhiệt độ màu, a = về tự động.')
-    else:
-        print('Không mở được cửa sổ xem trước (chạy trong terminal của NoMachine, không phải SSH), dùng dòng lệnh.')
+            cv2.imshow(WIN, vis)
+            cv2.waitKey(0)
+        except cv2.error as e:
+            print('Không mở được cửa sổ hiển thị (%s)' % e)
+        return
 
-    def save(n):
-        img = grab()
-        name = '%s_%03d.jpg' % (a.group, start + n)
-        cv2.imwrite(os.path.join(out, name), img)
-        print('  đã lưu %s (độ sáng %.0f)' % (name, img.mean()))
+    import rospy
+    from sensor_msgs.msg import Image
+    state = {'img': None, 'n': 0}
 
-    saved = 0
-    last = time.time()
-    exp, wb, auto = a.exposure, a.wb, a.no_lock
-    try:
-        while (a.n <= 0 or saved < a.n) and not rospy.is_shutdown():
-            if gui:
-                if state['img'] is None:
-                    cv2.waitKey(50)
-                    continue
-                extra = 'AUTO' if auto else 'Exp %d  WB %dK' % (exp, wb)
-                key = preview(state['img'], a.group, saved, a.n, extra)
-                if key in (ord('q'), 27):
-                    break
-                if key in (ord('['), ord(']')):
-                    exp = max(1, int(exp * 0.7)) if key == ord('[') else min(5000, max(exp + 1, int(exp * 1.4)))
-                    v4l2('exposure_auto=1')
-                    v4l2('exposure_absolute=%d' % exp)
-                    auto = False
-                elif key in (ord(','), ord('.')):
-                    wb = max(2800, wb - 200) if key == ord(',') else min(6500, wb + 200)
-                    v4l2('white_balance_temperature_auto=0')
-                    v4l2('white_balance_temperature=%d' % wb)
-                    auto = False
-                elif key == ord('a'):
-                    v4l2('exposure_auto=3')
-                    v4l2('white_balance_temperature_auto=1')
-                    auto = True
-                due = a.interval > 0 and time.time() - last >= a.interval
-                if due or (a.interval <= 0 and key in (13, 32)):
-                    save(saved)
-                    saved += 1
-                    last = time.time()
-            else:
-                if a.interval > 0:
-                    time.sleep(a.interval)
-                elif input('Ảnh %s [Enter = chụp, q = dừng] ' % (('%d/%d' % (saved + 1, a.n)) if a.n > 0 else ('%d' % (saved + 1)))).strip().lower() == 'q':
-                    break
-                save(saved)
-                saved += 1
-    except KeyboardInterrupt:
-        pass
-    if gui:
-        cv2.destroyAllWindows()
-    print('Xong: %d ảnh trong %s' % (saved, out))
+    def on_image(msg):
+        state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()  # RGB
+        state['n'] += 1
+
+    rospy.init_node('detect_view', anonymous=True)
+    rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
+    print('Chờ ảnh từ', TOPIC, '...')
+    cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+
+    last_n, fps, t_prev = 0, 0.0, time.time()
+    while not rospy.is_shutdown():
+        if state['img'] is None or state['n'] == last_n:
+            if cv2.waitKey(10) & 0xFF in (ord('q'), 27):
+                break
+            continue
+        last_n = state['n']
+        bgr = cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)   # mô hình train trên ảnh BGR (cv2.imread)
+        t0 = time.time()
+        dets = det(bgr)
+        ms = (time.time() - t0) * 1000
+        now = time.time()
+        fps = 1.0 / (now - t_prev) if fps == 0 else fps * 0.8 + 0.2 / (now - t_prev)
+        t_prev = now
+        vis = draw(bgr, dets, det.names, fps, ms)
+        cv2.imshow(WIN, vis)
+        k = cv2.waitKey(1) & 0xFF
+        if k in (ord('q'), 27):
+            break
+        if k == ord('s'):
+            save(vis, a.save_dir)
+    cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
@@ -366,71 +362,584 @@ if __name__ == '__main__':
 
 ---
 
-### `tests\scan_capture.py`
+### `robot\motion.py`
 
-*Dung lượng: 5.98 KB | Số dòng: 168*
+*Dung lượng: 5.94 KB | Số dòng: 134*
 
 ```python
 #!/usr/bin/env python3
-# Test kết hợp: thanh trượt -> tay máy -> chụp ảnh, tại từng điểm dừng.
-#
-# Cách điều khiển (khớp với các file hiện có của bạn):
-#   - Tay máy: qua ROS topic (/jetmax/command), giống test_move.py. KHÔNG tạo hiwonder.JetMax()
-#     trong script này vì node jetmax_control đã giữ bus servo.
-#   - Thanh trượt: hiwonder.Stepper(1) trực tiếp, giống stepper_teleop.py (goto là bước TƯƠNG ĐỐI).
-#   - Ảnh: /usb_cam/image_rect_color (RGB), lưu ~/capture_scan/ + scan.csv
-#
-# Yêu cầu: node jetmax_control và usb_cam đang chạy (roslaunch như bình thường).
-# Mỗi điểm dừng hỏi [Enter = chạy, q = dừng]. Kết thúc/lỗi/q: tay máy về chỗ cũ, thanh trượt về 0.
+# Điều khiển tay máy (ROS topic) + thanh trượt (hiwonder.Stepper) + đầu hút. Tách từ tests/pick_place.py để dùng chung.
+# Cần node jetmax_control đang chạy và rospy.init_node() đã được gọi trước khi tạo Mover.
+# KHÔNG tạo hiwonder.JetMax() ở đây vì node jetmax_control đã giữ bus servo.
 
-import os, csv, time
+import math, time
+import rospy
+from std_msgs.msg import Bool
+from jetmax_control.msg import SetJetMax, JetMax
+
+X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0   # giống các script trước
+TOL = 5.0                       # mm, sai lệch cho phép giữa đích và vị trí thực
+FAST, SLOW = 100.0, 40.0        # mm/giây: di chuyển bình thường / khi hạ xuống chạm quân cờ
+SLIDER_MIN, SLIDER_MAX = 0, 5200
+SLIDER_SPEED = 800.0            # bước/giây, dùng ước lượng thời gian chờ (hãng ghi 1000; để thấp cho chắc)
+SLIDER_MIN_Z = 40.0             # chỉ trượt khi tay máy nâng đủ cao
+
+
+def in_limits(p):
+    x, y, z = p
+    return (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
+            and (x * x + y * y) ** 0.5 >= R_MIN)
+
+
+class Mover:
+    def __init__(self, use_slider=True):
+        self.cmd = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
+        self.sucker = rospy.Publisher('/jetmax/end_effector/sucker/command', Bool, queue_size=1)
+        self.stepper, self.pos, self.enabled = None, 0, False
+        if use_slider:
+            import hiwonder
+            self.stepper = hiwonder.Stepper(1)
+        rospy.sleep(1.0)
+        self.start = self.status()
+        self.sucker.publish(Bool(data=False))
+
+    # ---------------------------------------------------------------- tay máy
+    def status(self):
+        m = rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
+        return m.x, m.y, m.z
+
+    def goto(self, p, speed=FAST):
+        if not in_limits(p):
+            raise ValueError('Điểm (%.1f, %.1f, %.1f) ngoài giới hạn an toàn' % tuple(p))
+        cur = self.status()
+        dist = math.sqrt(sum((p[i] - cur[i]) ** 2 for i in range(3)))
+        t = max(0.5, dist / speed)
+        self.cmd.publish(SetJetMax(x=p[0], y=p[1], z=p[2], duration=t))
+        rospy.sleep(t + 0.3)
+        now = self.status()
+        err = max(abs(now[i] - p[i]) for i in range(3))
+        if err > TOL:
+            raise RuntimeError('Tay máy chưa tới đích (lệch %.1f mm): lệnh có thể bị chặn bởi giới hạn' % err)
+
+    # --------------------------------------------------------------- thanh trượt
+    def home_slider(self):
+        if self.stepper is None:
+            return
+        if self.status()[2] < SLIDER_MIN_Z:
+            raise RuntimeError('Tay máy đang thấp hơn z=%d, hãy nâng lên trước' % SLIDER_MIN_Z)
+        st = self.stepper
+        st.go_home(True)                         # chặn cho tới khi về home, không có timeout, canh nút nguồn
+        st.set_mode(st.EN)
+        st.set_div(st.DIV_1_4)
+        self.pos, self.enabled = 0, False
+
+    def slide_to(self, target):
+        if self.stepper is None:
+            return
+        target = int(max(SLIDER_MIN, min(SLIDER_MAX, target)))
+        d = target - self.pos
+        if d == 0:
+            return
+        if self.status()[2] < SLIDER_MIN_Z:
+            raise RuntimeError('Tay máy đang thấp hơn z=%d, không trượt' % SLIDER_MIN_Z)
+        if not self.enabled:
+            self.stepper.set_mode(self.stepper.SLEEP)   # chỉ gửi một lần
+            self.enabled = True
+        print('  thanh trượt %d -> %d' % (self.pos, target))
+        self.stepper.goto(d)                     # bước TƯƠNG ĐỐI
+        time.sleep(abs(d) / SLIDER_SPEED + 0.3)
+        self.pos = target
+
+    # ------------------------------------------------------------ thao tác cấp cao
+    # sq_pos = (slider, x, y) lấy từ Board.position()
+    def hover(self, sq_pos, zsafe):
+        s, x, y = sq_pos
+        self.slide_to(s)
+        self.goto((x, y, zsafe))
+
+    def pick(self, sq_pos, zpick, zsafe):
+        self.hover(sq_pos, zsafe)
+        _, x, y = sq_pos
+        self.sucker.publish(Bool(data=True))
+        rospy.sleep(0.3)
+        self.goto((x, y, zpick), SLOW)
+        rospy.sleep(0.8)                         # chờ hút bám chắc
+        self.goto((x, y, zsafe), SLOW)
+
+    def place(self, sq_pos, zplace, zsafe):
+        self.hover(sq_pos, zsafe)
+        _, x, y = sq_pos
+        self.goto((x, y, zplace), SLOW)
+        self.sucker.publish(Bool(data=False))    # thả, mở van xả khí
+        rospy.sleep(1.0)
+        self.goto((x, y, zsafe), SLOW)
+
+    # ------------------------------------------------------------------ an toàn
+    def safe_stop(self, zsafe):
+        """Tắt hút và nâng tay máy lên z an toàn (dùng khi có lỗi giữa chừng)."""
+        self.sucker.publish(Bool(data=False))
+        try:
+            cur = self.status()
+            if cur[2] < zsafe:
+                self.cmd.publish(SetJetMax(x=cur[0], y=cur[1], z=zsafe, duration=1.0))
+                rospy.sleep(1.4)
+        except Exception as e:
+            print('Không nâng được tay máy (%s), hãy kiểm tra thủ công' % e)
+
+    def restore(self, zsafe=50.0):
+        """Về trạng thái ban đầu: tắt hút, nâng lên, thanh trượt về 0, tay máy về vị trí lúc bắt đầu."""
+        self.sucker.publish(Bool(data=False))
+        rospy.sleep(0.6)
+        try:
+            if self.stepper is not None and self.pos != 0:
+                self.safe_stop(max(zsafe, SLIDER_MIN_Z))
+                self.slide_to(0)
+            self.cmd.publish(SetJetMax(x=self.start[0], y=self.start[1], z=self.start[2], duration=2.0))
+            rospy.sleep(2.5)
+        except Exception as e:
+            print('Không tự về được vị trí ban đầu (%s), hãy kiểm tra thủ công' % e)
+        if self.stepper is not None:
+            self.stepper.set_mode(self.stepper.EN)
+        print('Đã về vị trí ban đầu')
+```
+
+---
+
+## Nhóm 2: Cấu hình hệ thống (Configs)
+
+### `configs\board.yaml`
+
+*Dung lượng: 1.08 KB | Số dòng: 15*
+
+```yaml
+# Hiệu chuẩn bàn cờ. Đơn vị mm; slider tính bằng BƯỚC từ HOME của thanh trượt.
+# Quy ước ô: cột a..i từ trái sang phải nhìn từ phía quân ĐỎ, hàng 0 (phía đỏ) .. 9 (phía đen).
+#
+# Cách lấy số: chạy joint_teleop.py, đưa đầu hút tới TÂM giao điểm ở mỗi góc (đúng tâm quân cờ đặt ở góc đó),
+# bấm p để in slider/x/y rồi điền vào đây. Ở mỗi góc có thể dùng vị trí thanh trượt khác nhau,
+# miễn tay máy ở vùng với thoải mái (không sát biên).
+corners:
+  a0: {slider: null, x: null, y: null}   # góc đỏ bên trái
+  i0: {slider: null, x: null, y: null}   # góc đỏ bên phải
+  a9: {slider: null, x: null, y: null}   # góc đen bên trái
+  i9: {slider: null, x: null, y: null}   # góc đen bên phải
+
+z_pick: null    # z khi đầu hút chạm mặt quân cờ (giống --zpick trong pick_place.py)
+z_place: null   # z khi thả quân; để null thì = z_pick + 3
+z_safe: 50.0    # z khi di chuyển ngang (phải >= 40 để thanh trượt được phép chạy)
+```
+
+---
+
+## Nhóm 3: Test Scripts & Kịch bản thử nghiệm
+
+### `tests\move_piece.py`
+
+*Dung lượng: 7.26 KB | Số dòng: 151*
+
+```python
+#!/usr/bin/env python3
+# Bước 1 của robot đánh cờ: gắp quân từ ô này sang ô kia theo lệnh gõ tay (CHƯA dùng camera, CHƯA dùng mô hình).
+# Vị trí các ô lấy từ configs/board.yaml (4 góc đã dạy bằng joint_teleop.py), xem robot/board.py.
+# Yêu cầu: node jetmax_control đang chạy. Chạy từ thư mục gốc của repo trên robot:
+#
+#   python3 tests/move_piece.py --hover          # LẦN ĐẦU: chỉ bay trên các ô, không hạ, không hút
+#   python3 tests/move_piece.py                  # gắp - đặt thật (hỏi Enter trước mỗi nước)
+#   python3 tests/move_piece.py --yes            # không hỏi Enter
+#
+# Lệnh gõ trong chương trình:
+#   h2 e2          gắp quân ở h2, đặt xuống e2 (ô đích phải TRỐNG; cũng nhận dạng "h2e2")
+#   hover a0 i0 i9 a9   bay trên các ô lần lượt (kiểm tra hiệu chuẩn 4 góc, không hạ)
+#   touch e5       hạ xuống z_pick ở e5 KHÔNG hút, để kiểm tra độ cao chạm quân (cần có quân ở đó)
+#   where e5       in vị trí (thanh trượt, x, y) của ô
+#   q              thoát (tay máy về vị trí ban đầu, thanh trượt về 0)
+
+import os, sys, argparse
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, '..', 'robot')]   # chạy được cả khi để chung một thư mục lẫn theo cấu trúc repo
+
+import rospy
+from board import Board, parse_square, square_name, NF, NR
+from motion import Mover, in_limits, SLIDER_MIN, SLIDER_MAX
+
+
+class Cancel(Exception):
+    pass
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    cands = [os.path.join(HERE, '..', 'configs', 'board.yaml'), os.path.join(HERE, 'board.yaml')]
+    ap.add_argument('--config', default=next((c for c in cands if os.path.exists(c)), cands[0]),
+                    help='file hiệu chuẩn (mặc định: ../configs/board.yaml, hoặc board.yaml cạnh script)')
+    ap.add_argument('--hover', action='store_true', help='chỉ bay trên các ô, không hạ, không hút')
+    ap.add_argument('--yes', action='store_true', help='không hỏi Enter trước mỗi nước đi')
+    ap.add_argument('--no-home', action='store_true', help='không đưa thanh trượt về home lúc bắt đầu')
+    a = ap.parse_args()
+
+    board = Board.load(a.config)
+    zs, zp, zl = board.z_safe, board.z_pick, board.z_place
+
+    bad = set()                                  # kiểm tra cả 90 ô trước khi động tới robot
+    for f in range(NF):
+        for r in range(NR):
+            sq = square_name(f, r)
+            s, x, y = board.position(sq)
+            if not (SLIDER_MIN <= s <= SLIDER_MAX and all(in_limits((x, y, z)) for z in (zs, zp, zl))):
+                bad.add(sq)
+    if len(bad) == NF * NR:
+        raise SystemExit('Không ô nào nằm trong giới hạn an toàn, hãy kiểm tra lại 4 góc và z_pick trong board.yaml')
+    if bad:
+        print('CẢNH BÁO: %d ô ngoài giới hạn an toàn/tầm với, sẽ bị từ chối: %s' % (len(bad), ' '.join(sorted(bad))))
+
+    def pos_of(text):
+        sq = square_name(*parse_square(text))
+        if sq in bad:
+            raise ValueError('Ô %s ngoài giới hạn an toàn hoặc ngoài tầm với' % sq)
+        return sq, board.position(sq)
+
+    def ask(text):
+        if not a.yes and input(text + ' [Enter = chạy, q = hủy] ').strip().lower() == 'q':
+            raise Cancel()
+
+    rospy.init_node('move_piece')
+    mv = Mover()
+    moving = {'on': False}                       # đang giữa một chuyển động -> lỗi thì phải tắt hút và nâng lên
+    print('Vị trí ban đầu:', mv.start)
+    print('z_safe=%.1f z_pick=%.1f z_place=%.1f %s' % (zs, zp, zl, '[CHỈ BAY, KHÔNG HẠ]' if a.hover else ''))
+
+    try:
+        if not a.no_home:
+            ask('Đưa thanh trượt về HOME (vị trí 0). Tay máy phải đang nâng cao và không vướng')
+            mv.home_slider()
+        print('Lệnh: "h2 e2" | hover <ô>... | touch <ô> | where <ô> | q')
+        while True:
+            try:
+                line = input('> ').strip().lower()
+            except EOFError:
+                break
+            if not line:
+                continue
+            if line in ('q', 'quit', 'exit'):
+                break
+            tok = line.replace(',', ' ').split()
+            try:
+                if tok[0] == 'where':
+                    for t in tok[1:]:
+                        sq, p = pos_of(t)
+                        print('  %s: thanh trượt %d, x %.1f, y %.1f' % ((sq,) + p))
+                elif tok[0] == 'hover':
+                    plan = [pos_of(t) for t in tok[1:]]
+                    if not plan:
+                        raise ValueError('hover cần ít nhất một ô')
+                    ask('Bay trên: %s' % ' '.join(sq for sq, _ in plan))
+                    moving['on'] = True
+                    for sq, p in plan:
+                        print('  -> %s' % sq)
+                        mv.hover(p, zs)
+                elif tok[0] == 'touch':
+                    if a.hover:
+                        raise ValueError('Đang ở chế độ --hover, không hạ xuống')
+                    if len(tok) != 2:
+                        raise ValueError('Dùng: touch <ô>')
+                    sq, p = pos_of(tok[1])
+                    ask('Bay tới %s rồi hạ xuống z_pick=%.1f (không hút)' % (sq, zp))
+                    moving['on'] = True
+                    mv.hover(p, zs)
+                    mv.goto((p[1], p[2], zp), 40.0)
+                    input('  Đang chạm. Kiểm tra độ cao/vị trí, Enter để nâng lên ')
+                    mv.goto((p[1], p[2], zs), 40.0)
+                else:
+                    if len(tok) == 1 and len(tok[0]) == 4:
+                        tok = [tok[0][:2], tok[0][2:]]
+                    if len(tok) != 2:
+                        raise ValueError('Dùng: <ô đi> <ô đến>, ví dụ h2 e2')
+                    (sa, A), (sb, B) = pos_of(tok[0]), pos_of(tok[1])
+                    if sa == sb:
+                        raise ValueError('Ô đi và ô đến trùng nhau')
+                    ask('%s -> %s  (%s: trượt %d x %.1f y %.1f | %s: trượt %d x %.1f y %.1f)%s' % (
+                        sa, sb, sa, A[0], A[1], A[2], sb, B[0], B[1], B[2],
+                        '' if a.hover else '. Ô đích phải trống'))
+                    moving['on'] = True
+                    if a.hover:
+                        mv.hover(A, zs)
+                        mv.hover(B, zs)
+                    else:
+                        mv.pick(A, zp, zs)
+                        mv.place(B, zl, zs)
+                moving['on'] = False
+                print('  xong')
+            except Cancel:
+                print('  đã hủy')
+            except (ValueError, RuntimeError) as e:
+                print('LỖI:', e)
+                if moving['on']:
+                    mv.safe_stop(zs)
+                    moving['on'] = False
+                    print('Đã tắt hút và nâng tay máy. Quân cờ có thể đã rơi hoặc lệch, hãy kiểm tra bàn cờ.')
+    except Cancel:
+        print('Dừng theo yêu cầu')
+    except KeyboardInterrupt:
+        print('\nDừng bằng Ctrl+C')
+    except (ValueError, RuntimeError) as e:
+        print('LỖI:', e)
+    finally:
+        mv.restore(zs)
+
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+### `tests\pick_place.py`
+
+*Dung lượng: 8.18 KB | Số dòng: 172*
+
+```python
+#!/usr/bin/env python3
+# Gắp ở điểm A, đặt ở điểm B bằng đầu hút, CÓ dùng thanh trượt (chưa dùng camera).
+# Tay máy điều khiển qua ROS topic (cần node jetmax_control đang chạy), thanh trượt qua hiwonder.Stepper.
+#
+# Bước 1 (chỉ bay trên A và B, KHÔNG hạ xuống, KHÔNG hút; thanh trượt vẫn chạy thật):
+#   python3 pick_place.py --a 0 -210.4 --b 0 -200.4 --zpick -8.8 --zplace -5.4 --sa 1500 --sb 5000 --hover
+# Bước 2 (gắp - đặt thật, hỏi Enter trước mỗi pha):
+#   python3 pick_place.py --a 0 -210.4 --b 0 -200.4 --zpick -8.8 --zplace -5.4 --sa 1500 --sb 5000
+# Khi chắc chắn, thêm --yes để chạy liền không hỏi.
+#
+# Tọa độ A, B và số bước trượt lấy từ joint_teleop.py (bấm p). Số bước trượt là tính từ HOME của thanh trượt,
+# nên script sẽ đưa thanh trượt về HOME trước khi bắt đầu (bỏ qua bằng --no-home nếu chắc chắn nó đang ở home).
+
+import argparse, math, time
+import rospy
+from std_msgs.msg import Bool
+from jetmax_control.msg import SetJetMax, JetMax
+
+X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0   # giống các script trước
+TOL = 5.0                      # mm, sai lệch cho phép giữa đích và vị trí thực
+FAST, SLOW = 100.0, 40.0       # mm/giây: di chuyển bình thường / khi hạ xuống chạm quân cờ
+SLIDER_MIN, SLIDER_MAX = 0, 5200
+SLIDER_SPEED = 800.0           # bước/giây, dùng để ước lượng thời gian chờ (hãng ghi 1000; để thấp cho chắc)
+SLIDER_MIN_Z = 40.0            # chỉ trượt khi tay máy nâng đủ cao
+
+S = {'stepper': None, 'pos': 0, 'enabled': False}
+
+
+def status():
+    m = rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
+    return m.x, m.y, m.z
+
+
+def check(p):
+    x, y, z = p
+    if not (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
+            and (x * x + y * y) ** 0.5 >= R_MIN):
+        raise ValueError('Điểm (%.1f, %.1f, %.1f) ngoài giới hạn an toàn' % p)
+
+
+def goto(pub, p, speed=FAST):
+    check(p)
+    cur = status()
+    dist = math.sqrt(sum((p[i] - cur[i]) ** 2 for i in range(3)))
+    t = max(0.5, dist / speed)
+    pub.publish(SetJetMax(x=p[0], y=p[1], z=p[2], duration=t))
+    rospy.sleep(t + 0.3)
+    now = status()
+    err = max(abs(now[i] - p[i]) for i in range(3))
+    if err > TOL:
+        raise RuntimeError('Tay máy chưa tới đích (lệch %.1f mm): lệnh có thể bị chặn bởi giới hạn' % err)
+
+
+def slide_to(target):
+    st = S['stepper']
+    if st is None:
+        raise RuntimeError('Không có thanh trượt')
+    target = int(max(SLIDER_MIN, min(SLIDER_MAX, target)))
+    d = target - S['pos']
+    if d == 0:
+        return
+    if status()[2] < SLIDER_MIN_Z:
+        raise RuntimeError('Tay máy đang thấp hơn z=%d, không trượt' % SLIDER_MIN_Z)
+    if not S['enabled']:
+        st.set_mode(st.SLEEP)                    # chỉ gửi một lần
+        S['enabled'] = True
+    print('  thanh trượt %d -> %d' % (S['pos'], target))
+    st.goto(d)
+    time.sleep(abs(d) / SLIDER_SPEED + 0.3)
+    S['pos'] = target
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--a', type=float, nargs=2, required=True, metavar=('X', 'Y'), help='điểm gắp')
+    ap.add_argument('--b', type=float, nargs=2, required=True, metavar=('X', 'Y'), help='điểm đặt')
+    ap.add_argument('--zpick', type=float, required=True, help='z khi đầu hút chạm quân cờ ở A')
+    ap.add_argument('--zplace', type=float, default=None, help='z khi thả ở B (mặc định = zpick + 3)')
+    ap.add_argument('--zsafe', type=float, default=50.0, help='z khi di chuyển ngang')
+    ap.add_argument('--sa', type=int, default=0, help='vị trí thanh trượt khi gắp ở A (bước từ home)')
+    ap.add_argument('--sb', type=int, default=0, help='vị trí thanh trượt khi đặt ở B (bước từ home)')
+    ap.add_argument('--no-home', action='store_true', help='không đưa thanh trượt về home lúc bắt đầu')
+    ap.add_argument('--hover', action='store_true', help='chỉ bay trên A và B, không hạ, không hút')
+    ap.add_argument('--yes', action='store_true', help='không hỏi Enter trước mỗi pha')
+    a = ap.parse_args()
+    zplace = a.zplace if a.zplace is not None else a.zpick + 3
+    A, B = a.a, a.b
+    for s in (a.sa, a.sb):
+        if not SLIDER_MIN <= s <= SLIDER_MAX:
+            raise SystemExit('Vị trí thanh trượt %d ngoài khoảng %d..%d' % (s, SLIDER_MIN, SLIDER_MAX))
+
+    def ask(text):
+        if not a.yes and input(text + ' [Enter = chạy, q = dừng] ').strip().lower() == 'q':
+            raise KeyboardInterrupt
+
+    rospy.init_node('pick_place')
+    abs_pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
+    sucker = rospy.Publisher('/jetmax/end_effector/sucker/command', Bool, queue_size=1)
+    need_slider = a.sa != 0 or a.sb != 0
+    if need_slider:
+        try:
+            import hiwonder
+            S['stepper'] = hiwonder.Stepper(1)
+        except Exception as e:
+            raise SystemExit('Không khởi tạo được thanh trượt: %s' % e)
+    rospy.sleep(1.0)
+
+    start = status()
+    print('Vị trí ban đầu:', start)
+    print('A=%s (trượt %d)  B=%s (trượt %d)  zpick=%.1f zplace=%.1f zsafe=%.1f %s' % (
+        A, a.sa, B, a.sb, a.zpick, zplace, a.zsafe, '[CHỈ BAY, KHÔNG HẠ]' if a.hover else ''))
+    for p in [(A[0], A[1], a.zsafe), (B[0], B[1], a.zsafe), (A[0], A[1], a.zpick), (B[0], B[1], zplace)]:
+        check(p)                                 # kiểm tra mọi điểm trước khi di chuyển
+    try:
+        sucker.publish(Bool(data=False))
+        if need_slider and not a.no_home:
+            ask('Đưa thanh trượt về HOME (vị trí 0). Tay máy phải đang nâng cao và không vướng')
+            if start[2] < SLIDER_MIN_Z:
+                raise RuntimeError('Tay máy đang thấp hơn z=%d, hãy nâng lên trước' % SLIDER_MIN_Z)
+            st = S['stepper']
+            st.go_home(True)                     # chặn cho tới khi về home, không có timeout
+            st.set_mode(st.EN)
+            st.set_div(st.DIV_1_4)
+            S['pos'], S['enabled'] = 0, False
+        ask('Trượt tới %d và bay tới trên A' % a.sa)
+        slide_to(a.sa)
+        goto(abs_pub, (A[0], A[1], a.zsafe))
+        if a.hover:
+            ask('Trượt tới %d và bay tới trên B' % a.sb)
+            slide_to(a.sb)
+            goto(abs_pub, (B[0], B[1], a.zsafe))
+        else:
+            ask('Hạ xuống A và hút')
+            sucker.publish(Bool(data=True))
+            rospy.sleep(0.3)
+            goto(abs_pub, (A[0], A[1], a.zpick), SLOW)
+            rospy.sleep(0.8)                     # chờ hút bám chắc
+            goto(abs_pub, (A[0], A[1], a.zsafe), SLOW)
+            ask('Mang tới B (trượt tới %d)' % a.sb)
+            slide_to(a.sb)
+            goto(abs_pub, (B[0], B[1], a.zsafe))
+            ask('Hạ xuống B và thả')
+            goto(abs_pub, (B[0], B[1], zplace), SLOW)
+            sucker.publish(Bool(data=False))     # thả, mở van xả khí
+            rospy.sleep(1.0)
+            goto(abs_pub, (B[0], B[1], a.zsafe), SLOW)
+        print('Xong')
+    except KeyboardInterrupt:
+        print('Dừng theo yêu cầu')
+    except (ValueError, RuntimeError) as e:
+        print('LỖI:', e)
+    finally:
+        sucker.publish(Bool(data=False))
+        rospy.sleep(0.6)
+        try:
+            cur = status()
+            if S['stepper'] is not None and S['pos'] != 0 and cur[2] < SLIDER_MIN_Z:
+                abs_pub.publish(SetJetMax(x=cur[0], y=cur[1], z=a.zsafe, duration=1.0))   # nâng lên trước khi trượt về
+                rospy.sleep(1.4)
+            if S['stepper'] is not None and S['pos'] != 0:
+                slide_to(0)
+            abs_pub.publish(SetJetMax(x=start[0], y=start[1], z=start[2], duration=2.0))
+            rospy.sleep(2.5)
+        except Exception as e:
+            print('Không tự về được vị trí ban đầu (%s), hãy kiểm tra thủ công' % e)
+        if S['stepper'] is not None:
+            S['stepper'].set_mode(S['stepper'].EN)
+        print('Đã về vị trí ban đầu')
+
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+### `tests\scan_detect.py`
+
+*Dung lượng: 8.53 KB | Số dòng: 203*
+
+```python
+#!/usr/bin/env python3
+# Quét + nhận diện: thanh trượt -> tay máy -> chụp ảnh -> YOLO11 nhận diện, tại từng điểm dừng.
+# Ghép từ scan_capture.py (điều khiển, giới hạn an toàn) và detect_view.py (mô hình).
+# CHƯA gắp quân cờ; chỉ di chuyển, chụp, nhận diện, vẽ và ghi kết quả.
+#
+# Đặt scan_detect.py CÙNG THƯ MỤC với detect_view.py (file này import từ đó).
+# Yêu cầu: node jetmax_control và usb_cam đang chạy.
+#
+# Ví dụ:
+#   python3 scan_detect.py --model ~/models/best.onnx
+#   python3 scan_detect.py --model ~/models/best.onnx --sliders 0 1500 3000 --conf 0.4
+#   python3 scan_detect.py --model ~/models/best.onnx --yes          # không hỏi Enter mỗi điểm
+#
+# Kết quả trong ~/scan_detect/<thời điểm chạy>/ :
+#   raw_*.jpg (ảnh gốc), det_*.jpg (ảnh đã vẽ khung), detections.csv (mỗi dòng 1 quân cờ).
+# Kết thúc/lỗi/q/Ctrl+C: tay máy về chỗ cũ, thanh trượt về 0.
+
+import os, csv, time, argparse
 import cv2
 import numpy as np
 import rospy
 import hiwonder
 from sensor_msgs.msg import Image
 from jetmax_control.msg import SetJetMax, JetMax
+import sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, '..', 'robot')]
+from detect_view import load_backend, draw
 
 TOPIC = '/usb_cam/image_rect_color'
-OUT = os.path.expanduser('~/capture_scan')
+OUT_ROOT = os.path.expanduser('~/scan_detect')
 
-# ---- Kế hoạch quét (chỉnh ở đây) ----
-SLIDER_POS = [0, 1000, 2000]                 # bước, 0 = home (ví dụ hãng đi tối đa ~5200)
+# ---- Kế hoạch quét (chỉnh ở đây hoặc bằng --sliders) ----
+SLIDER_POS = [0, 1000, 2000]                 # bước từ home
 ARM_OFFSETS = [(0, 0, 0), (20, 0, 0), (-20, 0, 0),
                (0, 20, 0), (0, -20, 0), (0, 0, -20)]   # mm, tính từ vị trí ban đầu
 DUR = 2.0                                    # giây mỗi lần di chuyển tay máy
 
-# ---- Giới hạn cứng (từ jetmax.py: z <= 225, bán kính xy >= 50 nếu không lệnh bị bỏ qua im lặng) ----
+# ---- Giới hạn an toàn (giống scan_capture.py / pick_place.py) ----
 SLIDER_MIN, SLIDER_MAX = 0, 5200
-X_LIM, Y_LIM, Z_LIM = (-120, 120), (-230, -100), (-12, 225)   # bảo thủ, nới dần sau khi thử
-R_MIN = 50.0
-TOL = 5.0                                    # mm, sai lệch cho phép giữa đích và vị trí thực
+SLIDER_SPEED = 800.0                         # bước/giây, dùng ước lượng thời gian chờ (hãng ghi 1000)
+SLIDER_MIN_Z = 40.0                          # chỉ trượt khi tay máy nâng đủ cao
+X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0
+TOL = 5.0                                    # mm
 
 
 class Stop(Exception):
     pass
 
 
-state = {'img': None, 'n': 0, 'pos': None}
+state = {'img': None, 'n': 0}
 
 
 def on_image(msg):
-    state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()
+    state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()   # RGB
     state['n'] += 1
-
-
-def on_status(msg):
-    state['pos'] = (msg.x, msg.y, msg.z)
 
 
 def get_pos():
     m = rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
     return m.x, m.y, m.z
-
-
-def ask(text):
-    if input(text + ' [Enter = chạy, q = dừng] ').strip().lower() == 'q':
-        raise Stop()
 
 
 def check_target(x, y, z):
@@ -440,70 +949,87 @@ def check_target(x, y, z):
         raise ValueError('Đích (%.1f, %.1f, %.1f) ngoài giới hạn an toàn, bỏ qua' % (x, y, z))
 
 
-def move_arm(abs_pub, target):
+def move_arm(pub, target):
     check_target(*target)
-    abs_pub.publish(SetJetMax(x=target[0], y=target[1], z=target[2], duration=DUR))
+    pub.publish(SetJetMax(x=target[0], y=target[1], z=target[2], duration=DUR))
     rospy.sleep(DUR + 0.7)
     cur = get_pos()
-    err = max(abs(cur[i] - target[i]) for i in range(3))
-    if err > TOL:
-        print('  CẢNH BÁO: tay máy lệch %.1f mm so với đích (lệnh có thể bị chặn bởi giới hạn)' % err)
+    if max(abs(cur[i] - target[i]) for i in range(3)) > TOL:
+        print('  CẢNH BÁO: tay máy lệch so với đích (lệnh có thể bị chặn bởi giới hạn)')
     return cur
 
 
 def move_slider(stepper, pos, new):
-    new = max(SLIDER_MIN, min(SLIDER_MAX, new))
+    new = int(max(SLIDER_MIN, min(SLIDER_MAX, new)))
     d = new - pos
     if d == 0:
         return pos
+    if get_pos()[2] < SLIDER_MIN_Z:
+        raise RuntimeError('Tay máy đang thấp hơn z=%d, không trượt' % SLIDER_MIN_Z)
     stepper.set_mode(stepper.SLEEP)
-    stepper.goto(d)
-    time.sleep(abs(d) / 1000.0 + 0.5)
+    stepper.goto(d)                          # bước TƯƠNG ĐỐI
+    time.sleep(abs(d) / SLIDER_SPEED + 0.5)
     return new
 
 
 def grab():
-    t0 = time.time()
-    n0 = state['n']
-    while state['n'] < n0 + 2:           # đợi khung hình mới sau khi dừng hẳn
+    t0, n0 = time.time(), state['n']
+    while state['n'] < n0 + 2:               # đợi khung hình mới sau khi dừng hẳn
         if time.time() - t0 > 3:
             raise RuntimeError('Không nhận được ảnh từ ' + TOPIC)
         time.sleep(0.02)
-    return cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)
+    return cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)   # mô hình train trên ảnh BGR
 
 
 def main():
-    os.makedirs(OUT, exist_ok=True)
-    rospy.init_node('scan_capture')
-    abs_pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--model', required=True, help='đường dẫn best.pt hoặc best.onnx')
+    ap.add_argument('--conf', type=float, default=0.5)
+    ap.add_argument('--iou', type=float, default=0.45)
+    ap.add_argument('--sliders', type=int, nargs='+', default=SLIDER_POS, help='các vị trí thanh trượt (bước từ home)')
+    ap.add_argument('--yes', action='store_true', help='không hỏi Enter trước mỗi điểm dừng')
+    ap.add_argument('--no-show', action='store_true', help='không mở cửa sổ hiển thị')
+    a = ap.parse_args()
+    for s in a.sliders:
+        if not SLIDER_MIN <= s <= SLIDER_MAX:
+            raise SystemExit('Vị trí thanh trượt %d ngoài khoảng %d..%d' % (s, SLIDER_MIN, SLIDER_MAX))
+
+    def ask(text):
+        if not a.yes and input(text + ' [Enter = chạy, q = dừng] ').strip().lower() == 'q':
+            raise Stop()
+
+    det = load_backend(os.path.expanduser(a.model), a.conf, a.iou)   # nạp mô hình trước khi động tới robot
+    show = not a.no_show and bool(os.environ.get('DISPLAY'))
+
+    out = os.path.join(OUT_ROOT, time.strftime('%Y%m%d_%H%M%S'))
+    os.makedirs(out, exist_ok=True)
+
+    rospy.init_node('scan_detect')
+    pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
     rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
-    rospy.Subscriber('/jetmax/status', JetMax, on_status, queue_size=1)
     rospy.sleep(1.0)
 
     start = get_pos()
     print('Vị trí tay máy ban đầu =', start)
-    print('Thanh trượt sẽ về HOME. Hãy chắc tay máy đang nâng cao và không vướng vật cản.')
+    print('Thanh trượt sẽ về HOME. Hãy chắc tay máy đang nâng cao (z >= %d) và không vướng vật cản.' % SLIDER_MIN_Z)
+    if start[2] < SLIDER_MIN_Z:
+        raise SystemExit('Tay máy đang thấp hơn z=%d, hãy nâng lên trước' % SLIDER_MIN_Z)
     ask('Bắt đầu')
 
     stepper = hiwonder.Stepper(1)
     pos = 0
-    csv_path = os.path.join(OUT, 'scan.csv')
-    new_file = not os.path.exists(csv_path)
-    f = open(csv_path, 'a', newline='')
+    f = open(os.path.join(out, 'detections.csv'), 'w', newline='')
     w = csv.writer(f)
-    if new_file:
-        w.writerow(['file', 'slider', 'x', 'y', 'z'])
-    run = int(time.time())
+    w.writerow(['image', 'slider', 'arm_x', 'arm_y', 'arm_z', 'class', 'conf', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy'])
     n = 0
-
     try:
-        stepper.go_home(True)            # chặn cho tới khi về home (không có timeout, canh nút nguồn)
+        stepper.go_home(True)                # chặn cho tới khi về home (không có timeout, canh nút nguồn)
         stepper.set_mode(stepper.EN)
         stepper.set_div(stepper.DIV_1_4)
 
-        for sp in SLIDER_POS:
+        for sp in a.sliders:
             ask('Thanh trượt -> %d' % sp)
-            move_arm(abs_pub, start)     # luôn về tư thế cao ban đầu trước khi trượt
+            move_arm(pub, start)             # luôn về tư thế cao ban đầu trước khi trượt
             pos = move_slider(stepper, pos, sp)
             print('  thanh trượt = %d' % pos)
 
@@ -511,30 +1037,47 @@ def main():
                 target = (start[0] + off[0], start[1] + off[1], start[2] + off[2])
                 ask('  Tay máy offset %s' % (off,))
                 try:
-                    cur = move_arm(abs_pub, target)
+                    cur = move_arm(pub, target)
                 except ValueError as e:
                     print('  ', e)
                     continue
                 img = grab()
-                name = '%d_s%d_%03d.jpg' % (run, pos, n)
-                cv2.imwrite(os.path.join(OUT, name), img)
-                w.writerow([name, pos, '%.1f' % cur[0], '%.1f' % cur[1], '%.1f' % cur[2]])
+                t0 = time.time()
+                dets = det(img)
+                ms = (time.time() - t0) * 1000
+                tag = 's%d_%03d' % (pos, n)
+                cv2.imwrite(os.path.join(out, 'raw_%s.jpg' % tag), img)
+                vis = draw(img.copy(), dets, det.names, 0, ms)
+                cv2.imwrite(os.path.join(out, 'det_%s.jpg' % tag), vis)
+                for x1, y1, x2, y2, c, k in dets:
+                    name = det.names[int(k)] if int(k) < len(det.names) else str(int(k))
+                    w.writerow(['det_%s.jpg' % tag, pos, '%.1f' % cur[0], '%.1f' % cur[1], '%.1f' % cur[2],
+                                name, '%.3f' % c, int(x1), int(y1), int(x2), int(y2),
+                                int((x1 + x2) / 2), int((y1 + y2) / 2)])
                 f.flush()
+                print('  %s: %d quân (%.0f ms) %s' % (tag, len(dets), ms,
+                                                       ', '.join(sorted(det.names[int(d[5])] for d in dets))))
+                if show:
+                    cv2.imshow('scan_detect', vis)
+                    cv2.waitKey(1)
                 n += 1
-                print('  đã lưu', name)
     except Stop:
         print('Dừng theo yêu cầu')
+    except (ValueError, RuntimeError) as e:
+        print('LỖI:', e)
     finally:
         f.close()
         try:
-            abs_pub.publish(SetJetMax(x=start[0], y=start[1], z=start[2], duration=2.0))
+            pub.publish(SetJetMax(x=start[0], y=start[1], z=start[2], duration=2.0))
             rospy.sleep(2.5)
             if pos > 0:
-                stepper.goto(-pos)       # quay lại home như ví dụ hãng
-                time.sleep(pos / 1000.0 + 0.5)
+                stepper.goto(-pos)           # quay lại home
+                time.sleep(pos / SLIDER_SPEED + 0.5)
             stepper.set_mode(stepper.EN)
         finally:
-            print('Đã về vị trí ban đầu, đã lưu %d ảnh vào %s' % (n, OUT))
+            if show:
+                cv2.destroyAllWindows()
+            print('Đã về vị trí ban đầu. Đã xử lý %d ảnh, kết quả ở %s' % (n, out))
 
 
 if __name__ == '__main__':
@@ -543,7 +1086,7 @@ if __name__ == '__main__':
 
 ---
 
-## Nhóm 2: Mô hình & Dữ liệu
+## Nhóm 4: Huấn luyện, Cấu trúc Class & Dataset
 
 ### `training\README.md`
 
@@ -1333,314 +1876,11 @@ files.download('/content/yolo11n_640.zip')
 
 ---
 
-### `runs\yolo11n_640\results.csv`
+## Nhóm 5: Cấu hình danh sách Class & Dataset Config
 
-*Dung lượng: 12.40 KB | Số dòng: 101*
+> ⚠️ Không tìm thấy file nào thuộc nhóm này trong dự án.
 
-```csv
-epoch,time,train/box_loss,train/cls_loss,train/dfl_loss,metrics/precision(B),metrics/recall(B),metrics/mAP50(B),metrics/mAP50-95(B),val/box_loss,val/cls_loss,val/dfl_loss,lr/pg0,lr/pg1,lr/pg2
-1,112.154,1.08811,2.03522,1.03137,0.75366,0.6644,0.78154,0.58506,0.90759,1.09886,0.94196,0.000184791,0.000184791,0.000184791
-2,217.761,0.88325,1.00072,0.95006,0.86552,0.81591,0.90605,0.72214,0.73186,0.74927,0.89099,0.000366461,0.000366461,0.000366461
-3,319.293,0.84482,0.79796,0.93786,0.90926,0.87549,0.94124,0.75852,0.71325,0.57522,0.8868,0.00054446,0.00054446,0.00054446
-4,420.224,0.80391,0.69491,0.92563,0.9284,0.8969,0.94967,0.7707,0.71383,0.50203,0.88696,0.000539487,0.000539487,0.000539487
-5,520.107,0.79007,0.64044,0.9219,0.95568,0.91751,0.96039,0.78219,0.68137,0.43488,0.88164,0.000533982,0.000533982,0.000533982
-6,623.951,0.77072,0.60669,0.91428,0.95923,0.91844,0.96005,0.78536,0.67765,0.42219,0.88378,0.000528478,0.000528478,0.000528478
-7,108.317,0.77062,0.58781,0.91277,0.97142,0.9292,0.96314,0.8003,0.6511,0.39453,0.87214,0.000522974,0.000522974,0.000522974
-8,207.321,0.75296,0.55577,0.90912,0.96549,0.93512,0.96398,0.78898,0.68572,0.41504,0.87629,0.000517469,0.000517469,0.000517469
-9,305.613,0.74053,0.54243,0.90517,0.97373,0.93561,0.96484,0.80765,0.62696,0.36754,0.86464,0.000511965,0.000511965,0.000511965
-10,405.445,0.71716,0.5147,0.89831,0.97622,0.93741,0.966,0.79249,0.69427,0.36658,0.88102,0.00050646,0.00050646,0.00050646
-11,504.257,0.70728,0.50359,0.89512,0.98016,0.94241,0.9675,0.81232,0.6384,0.35686,0.86477,0.000500956,0.000500956,0.000500956
-12,605.153,0.70089,0.49193,0.89143,0.9815,0.94508,0.96726,0.79632,0.672,0.34805,0.88067,0.000495452,0.000495452,0.000495452
-13,703.043,0.72093,0.49961,0.89824,0.9764,0.94336,0.96606,0.79473,0.68552,0.36742,0.87567,0.000489947,0.000489947,0.000489947
-14,802.35,0.70127,0.48923,0.8936,0.98356,0.94843,0.96722,0.82057,0.61274,0.3368,0.86008,0.000484443,0.000484443,0.000484443
-15,901.997,0.69931,0.47756,0.89009,0.9832,0.94674,0.96711,0.79108,0.72394,0.3522,0.88177,0.000478938,0.000478938,0.000478938
-16,1001.18,0.68945,0.47128,0.88816,0.9844,0.95054,0.96765,0.80147,0.66911,0.33039,0.87276,0.000473434,0.000473434,0.000473434
-17,1099.23,0.69398,0.46171,0.89061,0.98714,0.95415,0.9688,0.80779,0.6526,0.31964,0.86485,0.00046793,0.00046793,0.00046793
-18,1197.67,0.69254,0.45822,0.89051,0.98366,0.9516,0.96765,0.80341,0.6749,0.33121,0.87349,0.000462425,0.000462425,0.000462425
-19,1296.1,0.68578,0.4572,0.88819,0.98623,0.95534,0.96878,0.82036,0.62056,0.30639,0.85899,0.000456921,0.000456921,0.000456921
-20,1392.86,0.67715,0.44843,0.88458,0.98909,0.95126,0.96844,0.82027,0.61214,0.31357,0.85644,0.000451416,0.000451416,0.000451416
-21,1489.89,0.68783,0.44757,0.88739,0.98672,0.95405,0.96816,0.80459,0.67443,0.31917,0.87098,0.000445912,0.000445912,0.000445912
-22,1591.38,0.67113,0.44057,0.88589,0.98681,0.95551,0.96964,0.8314,0.58183,0.30213,0.85005,0.000440408,0.000440408,0.000440408
-23,1688.98,0.66027,0.43669,0.88104,0.98982,0.95329,0.96824,0.83109,0.58601,0.30209,0.8527,0.000434903,0.000434903,0.000434903
-24,1785.24,0.65639,0.4319,0.88268,0.98853,0.95617,0.96949,0.83603,0.57397,0.29591,0.85187,0.000429399,0.000429399,0.000429399
-25,1882.14,0.65475,0.42699,0.87936,0.9848,0.95801,0.96931,0.81581,0.6404,0.30533,0.86257,0.000423894,0.000423894,0.000423894
-26,1980.04,0.65152,0.41942,0.87767,0.99036,0.95893,0.96972,0.82681,0.5977,0.29671,0.85559,0.00041839,0.00041839,0.00041839
-27,2077.2,0.6402,0.41621,0.87658,0.98773,0.96107,0.9696,0.82338,0.61055,0.2906,0.85614,0.000412886,0.000412886,0.000412886
-28,2175.18,0.6434,0.41419,0.87743,0.9864,0.9595,0.96867,0.83159,0.58089,0.28745,0.85489,0.000407381,0.000407381,0.000407381
-29,2272.76,0.64864,0.40675,0.87905,0.98992,0.96156,0.96964,0.83148,0.57815,0.27925,0.85297,0.000401877,0.000401877,0.000401877
-30,2370.17,0.6355,0.40783,0.87496,0.99108,0.95947,0.96915,0.83057,0.58185,0.28909,0.85153,0.000396372,0.000396372,0.000396372
-31,2468.5,0.63223,0.40446,0.8764,0.98981,0.95913,0.96855,0.83839,0.56338,0.2721,0.8471,0.000390868,0.000390868,0.000390868
-32,2572.54,0.63626,0.39742,0.87309,0.99049,0.95756,0.96967,0.8372,0.57127,0.27929,0.84788,0.000385364,0.000385364,0.000385364
-33,2671.43,0.62818,0.3895,0.87404,0.98932,0.96241,0.96928,0.84189,0.55543,0.27699,0.84812,0.000379859,0.000379859,0.000379859
-34,2772.04,0.63188,0.39247,0.87296,0.99035,0.96287,0.9698,0.84634,0.54454,0.26386,0.84339,0.000374355,0.000374355,0.000374355
-35,2873.65,0.63254,0.39457,0.87516,0.99255,0.9629,0.9701,0.83574,0.57797,0.26805,0.85045,0.00036885,0.00036885,0.00036885
-36,2973.58,0.62437,0.38965,0.87033,0.99075,0.96449,0.96855,0.83963,0.56868,0.26982,0.85275,0.000363346,0.000363346,0.000363346
-37,3073.56,0.62317,0.38711,0.87229,0.99123,0.9631,0.96968,0.84346,0.55261,0.26495,0.84844,0.000357842,0.000357842,0.000357842
-38,3172.87,0.62057,0.38759,0.8713,0.99312,0.96374,0.96895,0.8442,0.55318,0.25866,0.8456,0.000352337,0.000352337,0.000352337
-39,3272.48,0.61099,0.38081,0.86745,0.99183,0.9626,0.96949,0.84508,0.5562,0.26508,0.84837,0.000346833,0.000346833,0.000346833
-40,3371.66,0.61018,0.37738,0.86923,0.99235,0.96391,0.9702,0.84145,0.55943,0.25905,0.84845,0.000341328,0.000341328,0.000341328
-41,3470.35,0.61068,0.3773,0.86909,0.99254,0.96387,0.9704,0.8432,0.56224,0.25945,0.8518,0.000335824,0.000335824,0.000335824
-42,3571.78,0.60738,0.37485,0.86809,0.99335,0.96399,0.97001,0.84279,0.55616,0.25876,0.84963,0.00033032,0.00033032,0.00033032
-43,3670.88,0.61554,0.37533,0.86996,0.992,0.96315,0.97071,0.84049,0.5676,0.25752,0.85011,0.000324815,0.000324815,0.000324815
-44,3770.13,0.60551,0.36767,0.8662,0.99349,0.96356,0.97029,0.8481,0.54508,0.2524,0.84413,0.000319311,0.000319311,0.000319311
-45,3869.26,0.59762,0.36372,0.86514,0.99475,0.96274,0.96935,0.83826,0.5743,0.25405,0.84872,0.000313806,0.000313806,0.000313806
-46,3968.32,0.59632,0.36441,0.86582,0.99286,0.96457,0.96986,0.8499,0.53864,0.24979,0.84462,0.000308302,0.000308302,0.000308302
-47,4067.68,0.60035,0.36348,0.86567,0.99392,0.9645,0.96988,0.84627,0.54865,0.24889,0.84368,0.000302798,0.000302798,0.000302798
-48,4165.94,0.59855,0.36232,0.8654,0.99285,0.96498,0.97001,0.84962,0.54156,0.25064,0.84346,0.000297293,0.000297293,0.000297293
-49,4264.59,0.59897,0.36425,0.86523,0.99384,0.9644,0.96989,0.84869,0.5392,0.2464,0.84356,0.000291789,0.000291789,0.000291789
-50,4362.15,0.59264,0.3583,0.86416,0.99272,0.96621,0.97034,0.84419,0.54671,0.24643,0.8441,0.000286284,0.000286284,0.000286284
-51,4460.56,0.58614,0.35508,0.86296,0.99417,0.96545,0.97043,0.85045,0.53679,0.24493,0.84239,0.00028078,0.00028078,0.00028078
-52,4561.64,0.5863,0.35301,0.86267,0.99429,0.96601,0.96988,0.85526,0.52482,0.23752,0.84086,0.000275276,0.000275276,0.000275276
-53,4659.5,0.5838,0.35061,0.86268,0.99337,0.96629,0.97036,0.85366,0.53263,0.23916,0.84274,0.000269771,0.000269771,0.000269771
-54,4756.86,0.58464,0.35053,0.86352,0.99479,0.96669,0.97013,0.84917,0.54374,0.24124,0.84257,0.000264267,0.000264267,0.000264267
-55,4854.78,0.57824,0.35026,0.86205,0.99472,0.96689,0.97023,0.85408,0.53033,0.2373,0.84129,0.000258762,0.000258762,0.000258762
-56,4951.94,0.58493,0.3462,0.86173,0.9945,0.9663,0.97006,0.85065,0.54766,0.23962,0.84278,0.000253258,0.000253258,0.000253258
-57,5049.25,0.58275,0.34723,0.86302,0.99513,0.9667,0.97052,0.85332,0.53573,0.23873,0.8412,0.000247754,0.000247754,0.000247754
-58,5146.96,0.57398,0.34248,0.85984,0.99528,0.96545,0.96947,0.8545,0.52906,0.23625,0.84046,0.000242249,0.000242249,0.000242249
-59,5244.5,0.57557,0.34378,0.86051,0.99483,0.96646,0.97017,0.85276,0.53354,0.2369,0.84125,0.000236745,0.000236745,0.000236745
-60,5342.77,0.57161,0.3403,0.85986,0.99531,0.966,0.97002,0.85346,0.52969,0.2364,0.84042,0.00023124,0.00023124,0.00023124
-61,5440.21,0.57251,0.34122,0.85973,0.99598,0.96577,0.97005,0.85306,0.53138,0.23416,0.84027,0.000225736,0.000225736,0.000225736
-62,5537.32,0.5723,0.33777,0.85989,0.99469,0.96601,0.96995,0.85346,0.52942,0.23404,0.84238,0.000220232,0.000220232,0.000220232
-63,5634.56,0.56579,0.33522,0.85783,0.99594,0.96678,0.97075,0.85279,0.54081,0.23499,0.84128,0.000214727,0.000214727,0.000214727
-64,5734.01,0.57215,0.33499,0.85924,0.99521,0.96682,0.9703,0.85369,0.52722,0.23324,0.84122,0.000209223,0.000209223,0.000209223
-65,5833.95,0.56763,0.33347,0.8584,0.9954,0.96706,0.97023,0.85458,0.52325,0.23106,0.8404,0.000203718,0.000203718,0.000203718
-66,5932.82,0.56491,0.33233,0.85758,0.99547,0.96607,0.97064,0.85679,0.51577,0.23146,0.83834,0.000198214,0.000198214,0.000198214
-67,6032.92,0.5675,0.33316,0.85731,0.9951,0.9652,0.97059,0.85538,0.5216,0.23118,0.84025,0.00019271,0.00019271,0.00019271
-68,6132.43,0.56241,0.32942,0.85919,0.99567,0.96679,0.97003,0.85732,0.51492,0.2291,0.83885,0.000187205,0.000187205,0.000187205
-69,6232.11,0.55866,0.32799,0.85584,0.99508,0.96691,0.97069,0.85722,0.51559,0.22871,0.83816,0.000181701,0.000181701,0.000181701
-70,6331.64,0.55405,0.32409,0.85353,0.99569,0.96627,0.97071,0.85724,0.51577,0.22729,0.83776,0.000176196,0.000176196,0.000176196
-71,6428.9,0.55777,0.32514,0.85554,0.99545,0.96647,0.97077,0.85605,0.5233,0.22952,0.83889,0.000170692,0.000170692,0.000170692
-72,6527.09,0.54982,0.32243,0.85536,0.995,0.96746,0.97063,0.85582,0.5223,0.22774,0.83836,0.000165188,0.000165188,0.000165188
-73,6627.37,0.54996,0.32369,0.85558,0.99561,0.96635,0.96999,0.85645,0.51843,0.22808,0.83984,0.000159683,0.000159683,0.000159683
-74,6727.63,0.54619,0.32205,0.85213,0.99431,0.96708,0.97073,0.85603,0.52055,0.22747,0.83899,0.000154179,0.000154179,0.000154179
-75,6825.72,0.54956,0.31941,0.85335,0.99516,0.9666,0.97101,0.85721,0.51766,0.22575,0.83983,0.000148674,0.000148674,0.000148674
-76,6924.25,0.54398,0.31552,0.85187,0.99564,0.96566,0.97014,0.85825,0.50906,0.22462,0.83682,0.00014317,0.00014317,0.00014317
-77,7025,0.54457,0.31452,0.85182,0.9946,0.96748,0.97021,0.85878,0.50938,0.22372,0.83745,0.000137666,0.000137666,0.000137666
-78,7128.09,0.54231,0.31443,0.85225,0.99559,0.96714,0.97085,0.85855,0.51049,0.22357,0.83731,0.000132161,0.000132161,0.000132161
-79,7228.27,0.54034,0.31316,0.85133,0.99555,0.96687,0.97087,0.85895,0.51102,0.22283,0.83778,0.000126657,0.000126657,0.000126657
-80,7329.74,0.5386,0.31275,0.85107,0.99607,0.96652,0.97084,0.85785,0.51501,0.22295,0.83984,0.000121152,0.000121152,0.000121152
-81,7428.82,0.54715,0.31546,0.85303,0.99474,0.96732,0.97026,0.85863,0.51376,0.22352,0.83935,0.000115648,0.000115648,0.000115648
-82,7529.59,0.53745,0.3128,0.85047,0.99532,0.96706,0.97087,0.85863,0.51329,0.22264,0.8389,0.000110144,0.000110144,0.000110144
-83,7628.07,0.53722,0.30991,0.84933,0.99485,0.96702,0.97092,0.85728,0.51636,0.22351,0.83911,0.000104639,0.000104639,0.000104639
-84,7726.64,0.5321,0.30859,0.8498,0.99576,0.966,0.97101,0.85926,0.51226,0.22302,0.83841,9.91348e-05,9.91348e-05,9.91348e-05
-85,7824.66,0.52886,0.30437,0.85031,0.99502,0.96731,0.9702,0.8599,0.5099,0.22224,0.8374,9.36304e-05,9.36304e-05,9.36304e-05
-86,7923.47,0.53108,0.30661,0.84977,0.99572,0.96656,0.97026,0.85882,0.51212,0.22119,0.83803,8.8126e-05,8.8126e-05,8.8126e-05
-87,8021.51,0.5324,0.30596,0.84956,0.99535,0.96708,0.97019,0.85583,0.52108,0.22355,0.84063,8.26216e-05,8.26216e-05,8.26216e-05
-88,8119.55,0.52926,0.30542,0.84794,0.99449,0.96752,0.97091,0.85767,0.51644,0.22242,0.8397,7.71172e-05,7.71172e-05,7.71172e-05
-89,108.926,0.53069,0.30638,0.84794,0.99509,0.967,0.97098,0.85779,0.51677,0.2218,0.83912,7.16128e-05,7.16128e-05,7.16128e-05
-90,207.267,0.52616,0.30282,0.84765,0.99542,0.96694,0.97096,0.85771,0.51349,0.22033,0.83914,6.61084e-05,6.61084e-05,6.61084e-05
-91,301.935,0.53638,0.26287,0.87145,0.99481,0.96521,0.97008,0.85492,0.52275,0.22826,0.84144,6.0604e-05,6.0604e-05,6.0604e-05
-92,393.649,0.52892,0.25854,0.86785,0.99405,0.96572,0.96993,0.85567,0.52007,0.22887,0.84,5.50996e-05,5.50996e-05,5.50996e-05
-93,485.311,0.52339,0.25709,0.86622,0.99371,0.96561,0.96933,0.85628,0.51908,0.22821,0.84031,4.95952e-05,4.95952e-05,4.95952e-05
-94,577.289,0.51708,0.25169,0.8611,0.99422,0.96611,0.96939,0.85645,0.51702,0.22667,0.83921,4.40908e-05,4.40908e-05,4.40908e-05
-95,670.129,0.51956,0.25356,0.86545,0.99535,0.96495,0.97009,0.85692,0.51578,0.22527,0.8387,3.85864e-05,3.85864e-05,3.85864e-05
-96,761.942,0.52019,0.2535,0.86711,0.99533,0.96482,0.97007,0.85699,0.51448,0.22478,0.83895,3.3082e-05,3.3082e-05,3.3082e-05
-97,852.992,0.50961,0.24967,0.85933,0.99487,0.9659,0.97002,0.85679,0.51651,0.22416,0.83999,2.75776e-05,2.75776e-05,2.75776e-05
-98,943.813,0.50997,0.24993,0.86261,0.9953,0.96603,0.97,0.8564,0.51945,0.22469,0.84091,2.20732e-05,2.20732e-05,2.20732e-05
-99,1035.45,0.51412,0.25068,0.8623,0.99517,0.96628,0.97002,0.85517,0.52075,0.22497,0.84135,1.65688e-05,1.65688e-05,1.65688e-05
-100,1127.43,0.50401,0.24688,0.85893,0.99546,0.96587,0.97001,0.85565,0.52055,0.22416,0.84144,1.10644e-05,1.10644e-05,1.10644e-05
-```
-
----
-
-### `robot\models\best.onnx`
-
-- **Loại file:** Model Weights (.onnx)
-- **Kích thước file:** 10.18 MB
-> ℹ️ *Nội dung file nhị phân được bỏ qua.* 
-
----
-
-### `robot\models\best.pt`
-
-- **Loại file:** Model Weights (.pt)
-- **Kích thước file:** 5.24 MB
-> ℹ️ *Nội dung file nhị phân được bỏ qua.* 
-
----
-
-## Nhóm 3: Nhận diện & Điều khiển gắp (Kinematics, Calibration & Pick-Place)
-
-### `tests\pick_place.py`
-
-*Dung lượng: 8.18 KB | Số dòng: 172*
-
-```python
-#!/usr/bin/env python3
-# Gắp ở điểm A, đặt ở điểm B bằng đầu hút, CÓ dùng thanh trượt (chưa dùng camera).
-# Tay máy điều khiển qua ROS topic (cần node jetmax_control đang chạy), thanh trượt qua hiwonder.Stepper.
-#
-# Bước 1 (chỉ bay trên A và B, KHÔNG hạ xuống, KHÔNG hút; thanh trượt vẫn chạy thật):
-#   python3 pick_place.py --a 0 -210.4 --b 0 -200.4 --zpick -8.8 --zplace -5.4 --sa 1500 --sb 5000 --hover
-# Bước 2 (gắp - đặt thật, hỏi Enter trước mỗi pha):
-#   python3 pick_place.py --a 0 -210.4 --b 0 -200.4 --zpick -8.8 --zplace -5.4 --sa 1500 --sb 5000
-# Khi chắc chắn, thêm --yes để chạy liền không hỏi.
-#
-# Tọa độ A, B và số bước trượt lấy từ joint_teleop.py (bấm p). Số bước trượt là tính từ HOME của thanh trượt,
-# nên script sẽ đưa thanh trượt về HOME trước khi bắt đầu (bỏ qua bằng --no-home nếu chắc chắn nó đang ở home).
-
-import argparse, math, time
-import rospy
-from std_msgs.msg import Bool
-from jetmax_control.msg import SetJetMax, JetMax
-
-X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0   # giống các script trước
-TOL = 5.0                      # mm, sai lệch cho phép giữa đích và vị trí thực
-FAST, SLOW = 100.0, 40.0       # mm/giây: di chuyển bình thường / khi hạ xuống chạm quân cờ
-SLIDER_MIN, SLIDER_MAX = 0, 5200
-SLIDER_SPEED = 800.0           # bước/giây, dùng để ước lượng thời gian chờ (hãng ghi 1000; để thấp cho chắc)
-SLIDER_MIN_Z = 40.0            # chỉ trượt khi tay máy nâng đủ cao
-
-S = {'stepper': None, 'pos': 0, 'enabled': False}
-
-
-def status():
-    m = rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
-    return m.x, m.y, m.z
-
-
-def check(p):
-    x, y, z = p
-    if not (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
-            and (x * x + y * y) ** 0.5 >= R_MIN):
-        raise ValueError('Điểm (%.1f, %.1f, %.1f) ngoài giới hạn an toàn' % p)
-
-
-def goto(pub, p, speed=FAST):
-    check(p)
-    cur = status()
-    dist = math.sqrt(sum((p[i] - cur[i]) ** 2 for i in range(3)))
-    t = max(0.5, dist / speed)
-    pub.publish(SetJetMax(x=p[0], y=p[1], z=p[2], duration=t))
-    rospy.sleep(t + 0.3)
-    now = status()
-    err = max(abs(now[i] - p[i]) for i in range(3))
-    if err > TOL:
-        raise RuntimeError('Tay máy chưa tới đích (lệch %.1f mm): lệnh có thể bị chặn bởi giới hạn' % err)
-
-
-def slide_to(target):
-    st = S['stepper']
-    if st is None:
-        raise RuntimeError('Không có thanh trượt')
-    target = int(max(SLIDER_MIN, min(SLIDER_MAX, target)))
-    d = target - S['pos']
-    if d == 0:
-        return
-    if status()[2] < SLIDER_MIN_Z:
-        raise RuntimeError('Tay máy đang thấp hơn z=%d, không trượt' % SLIDER_MIN_Z)
-    if not S['enabled']:
-        st.set_mode(st.SLEEP)                    # chỉ gửi một lần
-        S['enabled'] = True
-    print('  thanh trượt %d -> %d' % (S['pos'], target))
-    st.goto(d)
-    time.sleep(abs(d) / SLIDER_SPEED + 0.3)
-    S['pos'] = target
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--a', type=float, nargs=2, required=True, metavar=('X', 'Y'), help='điểm gắp')
-    ap.add_argument('--b', type=float, nargs=2, required=True, metavar=('X', 'Y'), help='điểm đặt')
-    ap.add_argument('--zpick', type=float, required=True, help='z khi đầu hút chạm quân cờ ở A')
-    ap.add_argument('--zplace', type=float, default=None, help='z khi thả ở B (mặc định = zpick + 3)')
-    ap.add_argument('--zsafe', type=float, default=50.0, help='z khi di chuyển ngang')
-    ap.add_argument('--sa', type=int, default=0, help='vị trí thanh trượt khi gắp ở A (bước từ home)')
-    ap.add_argument('--sb', type=int, default=0, help='vị trí thanh trượt khi đặt ở B (bước từ home)')
-    ap.add_argument('--no-home', action='store_true', help='không đưa thanh trượt về home lúc bắt đầu')
-    ap.add_argument('--hover', action='store_true', help='chỉ bay trên A và B, không hạ, không hút')
-    ap.add_argument('--yes', action='store_true', help='không hỏi Enter trước mỗi pha')
-    a = ap.parse_args()
-    zplace = a.zplace if a.zplace is not None else a.zpick + 3
-    A, B = a.a, a.b
-    for s in (a.sa, a.sb):
-        if not SLIDER_MIN <= s <= SLIDER_MAX:
-            raise SystemExit('Vị trí thanh trượt %d ngoài khoảng %d..%d' % (s, SLIDER_MIN, SLIDER_MAX))
-
-    def ask(text):
-        if not a.yes and input(text + ' [Enter = chạy, q = dừng] ').strip().lower() == 'q':
-            raise KeyboardInterrupt
-
-    rospy.init_node('pick_place')
-    abs_pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
-    sucker = rospy.Publisher('/jetmax/end_effector/sucker/command', Bool, queue_size=1)
-    need_slider = a.sa != 0 or a.sb != 0
-    if need_slider:
-        try:
-            import hiwonder
-            S['stepper'] = hiwonder.Stepper(1)
-        except Exception as e:
-            raise SystemExit('Không khởi tạo được thanh trượt: %s' % e)
-    rospy.sleep(1.0)
-
-    start = status()
-    print('Vị trí ban đầu:', start)
-    print('A=%s (trượt %d)  B=%s (trượt %d)  zpick=%.1f zplace=%.1f zsafe=%.1f %s' % (
-        A, a.sa, B, a.sb, a.zpick, zplace, a.zsafe, '[CHỈ BAY, KHÔNG HẠ]' if a.hover else ''))
-    for p in [(A[0], A[1], a.zsafe), (B[0], B[1], a.zsafe), (A[0], A[1], a.zpick), (B[0], B[1], zplace)]:
-        check(p)                                 # kiểm tra mọi điểm trước khi di chuyển
-    try:
-        sucker.publish(Bool(data=False))
-        if need_slider and not a.no_home:
-            ask('Đưa thanh trượt về HOME (vị trí 0). Tay máy phải đang nâng cao và không vướng')
-            if start[2] < SLIDER_MIN_Z:
-                raise RuntimeError('Tay máy đang thấp hơn z=%d, hãy nâng lên trước' % SLIDER_MIN_Z)
-            st = S['stepper']
-            st.go_home(True)                     # chặn cho tới khi về home, không có timeout
-            st.set_mode(st.EN)
-            st.set_div(st.DIV_1_4)
-            S['pos'], S['enabled'] = 0, False
-        ask('Trượt tới %d và bay tới trên A' % a.sa)
-        slide_to(a.sa)
-        goto(abs_pub, (A[0], A[1], a.zsafe))
-        if a.hover:
-            ask('Trượt tới %d và bay tới trên B' % a.sb)
-            slide_to(a.sb)
-            goto(abs_pub, (B[0], B[1], a.zsafe))
-        else:
-            ask('Hạ xuống A và hút')
-            sucker.publish(Bool(data=True))
-            rospy.sleep(0.3)
-            goto(abs_pub, (A[0], A[1], a.zpick), SLOW)
-            rospy.sleep(0.8)                     # chờ hút bám chắc
-            goto(abs_pub, (A[0], A[1], a.zsafe), SLOW)
-            ask('Mang tới B (trượt tới %d)' % a.sb)
-            slide_to(a.sb)
-            goto(abs_pub, (B[0], B[1], a.zsafe))
-            ask('Hạ xuống B và thả')
-            goto(abs_pub, (B[0], B[1], zplace), SLOW)
-            sucker.publish(Bool(data=False))     # thả, mở van xả khí
-            rospy.sleep(1.0)
-            goto(abs_pub, (B[0], B[1], a.zsafe), SLOW)
-        print('Xong')
-    except KeyboardInterrupt:
-        print('Dừng theo yêu cầu')
-    except (ValueError, RuntimeError) as e:
-        print('LỖI:', e)
-    finally:
-        sucker.publish(Bool(data=False))
-        rospy.sleep(0.6)
-        try:
-            cur = status()
-            if S['stepper'] is not None and S['pos'] != 0 and cur[2] < SLIDER_MIN_Z:
-                abs_pub.publish(SetJetMax(x=cur[0], y=cur[1], z=a.zsafe, duration=1.0))   # nâng lên trước khi trượt về
-                rospy.sleep(1.4)
-            if S['stepper'] is not None and S['pos'] != 0:
-                slide_to(0)
-            abs_pub.publish(SetJetMax(x=start[0], y=start[1], z=start[2], duration=2.0))
-            rospy.sleep(2.5)
-        except Exception as e:
-            print('Không tự về được vị trí ban đầu (%s), hãy kiểm tra thủ công' % e)
-        if S['stepper'] is not None:
-            S['stepper'].set_mode(S['stepper'].EN)
-        print('Đã về vị trí ban đầu')
-
-
-if __name__ == '__main__':
-    main()
-```
-
----
+## Nhóm 6: Reference Scripts & API mẫu
 
 ### `docs\robot-reference\waste_classification_stepper.py`
 
@@ -1934,159 +2174,198 @@ if __name__ == '__main__':
 
 ---
 
-### `tests\analyze_images.py`
+### `docs\robot-reference\jetmax_control\scripts\jetmax_control_main.py`
 
-*Dung lượng: 6.12 KB | Số dòng: 143*
+*Dung lượng: 8.67 KB | Số dòng: 182*
 
 ```python
 #!/usr/bin/env python3
-# Phân tích chất lượng ảnh chụp từ camera JetMax để quyết định có cần tăng cường/xử lý ảnh hay không.
-# Chạy trên máy tính (cần: pip install opencv-python numpy):
-#   python tests/analyze_images.py data/capture_scan
-#   python tests/analyze_images.py data/capture_scan --imgsz 640
-#
-# Mỗi thư mục con được coi là một NHÓM (ví dụ: static, belt_slow, belt_mid, belt_fast, anh_sang_yeu...),
-# ảnh nằm trực tiếp trong thư mục gốc là nhóm ".". Kết quả in ra màn hình và lưu quality_report.csv.
-#
-# Các ngưỡng cảnh báo là NGƯỠNG THAM KHẢO, phụ thuộc cảnh và băng chuyền của bạn. Hãy so sánh các nhóm
-# với nhau (ví dụ độ nét khi băng chuyền chạy so với khi đứng yên) hơn là tin tuyệt đối vào một con số.
-
-import os, sys, csv, argparse
-import cv2
-import numpy as np
-
-EXTS = ('.jpg', '.jpeg', '.png', '.bmp')
-ANALYSIS_SIZE = 640          # cạnh dài khi tính độ nét/nhiễu, để so sánh được giữa các độ phân giải
+import actionlib
+import rospy
+from jetmax_control.msg import Mecanum
+from jetmax_control.msg import JetMax as JetMaxState
+from jetmax_control.msg import SetServo, SetJoint, SetJetMax
+from std_msgs.msg import UInt8, UInt16, Float32, Bool
+from std_srvs.srv import Empty
+import hiwonder
+import threading
+import action_set
 
 
-def noise_sigma(gray):
-    """Ước lượng độ lệch chuẩn nhiễu (phương pháp Immerkaer)."""
-    k = np.array([[1, -2, 1], [-2, 4, -2], [1, -2, 1]], np.float32)
-    conv = cv2.filter2D(gray.astype(np.float32), -1, k)[1:-1, 1:-1]
-    return float(np.mean(np.abs(conv)) * np.sqrt(0.5 * np.pi) / 6.0)
+# import jetmax_control_joystick as joystick
 
 
-def piece_diameter(gray_small):
-    """Ước lượng đường kính quân cờ (px, trên ảnh cạnh dài 640) bằng HoughCircles. Chỉ mang tính tham khảo."""
-    blur = cv2.medianBlur(gray_small, 5)
-    circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, dp=1.2, minDist=30,
-                               param1=100, param2=30, minRadius=10, maxRadius=60)
-    if circles is None:
-        return 0, float('nan')
-    d = circles[0, :, 2] * 2
-    return len(d), float(np.median(d))
+class JetMaxControl:
+    def __init__(self):
+        rospy.init_node('jetmax_control', anonymous=True)
+        self.pwm_servos = [hiwonder.pwm_servo1, hiwonder.pwm_servo2]
 
+        """
+        麦轮相关的topic
+        """
+        try:
+            self.chassis = hiwonder.MecanumChassis()
+            self.mecanum_pub = rospy.Publisher('/jetmax/mecanum/status', Mecanum, queue_size=1)
+            self.mecanum_sub = rospy.Subscriber('/jetmax/mecanum/command', Mecanum,
+                                                queue_size=1,
+                                                callback=lambda msg: self.chassis.set_velocity(msg.velocity,
+                                                                                               msg.direction,
+                                                                                               msg.angular_rate))
+        except Exception:
+            self.chassis = None
+            self.mecanum_sub = None
+            self.mecanum_pub = None
 
-def analyze(path, imgsz):
-    img = cv2.imread(path)
-    if img is None:
-        return None
-    h, w = img.shape[:2]
-    s = ANALYSIS_SIZE / max(h, w)
-    small = cv2.resize(img, (int(w * s), int(h * s)), interpolation=cv2.INTER_AREA)
-    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
-    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
-    b, g, r = [float(c.mean()) for c in cv2.split(small)]
-    gx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
-    gy = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
-    n_circ, d640 = piece_diameter(gray)
-    return {
-        'width': w, 'height': h,
-        'sharp_lap': float(cv2.Laplacian(gray, cv2.CV_64F).var()),
-        'sharp_ten': float(np.mean(gx ** 2 + gy ** 2)),
-        'brightness': float(gray.mean()),
-        'contrast': float(gray.std()),
-        'dark_clip_%': float((gray <= 5).mean() * 100),
-        'bright_clip_%': float((gray >= 250).mean() * 100),
-        'glare_%': float(((hsv[..., 2] >= 245) & (hsv[..., 1] < 40)).mean() * 100),
-        'saturation': float(hsv[..., 1].mean()),
-        'r_over_g': r / max(g, 1e-6), 'b_over_g': b / max(g, 1e-6),
-        'noise_sigma': noise_sigma(gray),
-        'n_circles': n_circ,
-        'piece_px_640': d640,
-        'piece_px_imgsz': d640 * imgsz / ANALYSIS_SIZE if d640 == d640 else float('nan'),
-    }
+        """
+        机械臂相关的topic
+        """
+        self.jetmax = hiwonder.JetMax()
+        # 机械臂末端位置控制topic
+        self.jetmax_pub = rospy.Publisher('/jetmax/status', JetMaxState, queue_size=1)
+        self.jetmax_sub = rospy.Subscriber('/jetmax/command', SetJetMax,
+                                           queue_size=1,
+                                           callback=lambda msg: self.jetmax.set_position((msg.x, msg.y, msg.z),
+                                                                                         msg.duration))
+        # 机械臂末端带速度的位置控制 topic
+        self.jetmax_speed_sub = rospy.Subscriber('/jetmax/speed_command', SetJetMax,
+                                                 queue_size=1,
+                                                 callback=lambda msg: self.jetmax.set_position_with_speed(
+                                                     (msg.x, msg.y, msg.z), max(msg.duration, 0.001)))
+        # 机械臂末端相对位置控制topic
+        self.jetmax_relative_sub = rospy.Subscriber('/jetmax/relative_command', SetJetMax,
+                                                    queue_size=1,
+                                                    callback=lambda msg: self.jetmax.set_position_relatively(
+                                                        (msg.x, msg.y, msg.z), msg.duration))
 
+        self.jetmax_joint_pubs = []
+        self.jetmax_joint_subs = []
+        self.jetmax_servo_pubs = []
+        self.jetmax_servo_subs = []
+        self.jetmax_servo_speed_subs = []
+        # 机械臂各个关节的topic
+        for i in range(1, 4):
+            joint_pub = rospy.Publisher('/jetmax/joint{}/status'.format(i), Float32, queue_size=1)
+            joint_cmd = rospy.Subscriber('/jetmax/joint{}/command'.format(i), SetJoint,
+                                         queue_size=1,
+                                         callback_args=i,
+                                         callback=lambda msg, joint_id: self.jetmax.set_joint(joint_id,
+                                                                                              msg.data,
+                                                                                              msg.duration))
+            servo_pub = rospy.Publisher('/jetmax/servo{}/status'.format(i), UInt16, queue_size=1)
+            servo_cmd = rospy.Subscriber('/jetmax/servo{}/command'.format(i), SetServo,
+                                         queue_size=1,
+                                         callback_args=i,
+                                         callback=lambda msg, servo_id: self.jetmax.set_servo(servo_id,
+                                                                                              msg.data,
+                                                                                              msg.duration))
+            servo_speed_cmd = rospy.Subscriber('/jetmax/servo{}/speed_command'.format(i), SetServo,
+                                               queue_size=1,
+                                               callback_args=i,
+                                               callback=lambda msg, servo_id: self.jetmax.set_servo_with_speed(
+                                                   servo_id,
+                                                   msg.data,
+                                                   msg.duration))
+            self.jetmax_joint_pubs.append(joint_pub)
+            self.jetmax_joint_subs.append(joint_cmd)
+            self.jetmax_servo_pubs.append(servo_pub)
+            self.jetmax_servo_subs.append(servo_cmd)
+            self.jetmax_servo_speed_subs.append(servo_speed_cmd)
 
-def flags(m, imgsz):
-    f = []
-    if m['sharp_lap'] < 60:
-        f.append('mờ')
-    if m['brightness'] < 70:
-        f.append('tối')
-    if m['brightness'] > 190:
-        f.append('quá sáng')
-    if m['dark_clip_%'] > 2 or m['bright_clip_%'] > 2:
-        f.append('mất chi tiết sáng/tối')
-    if m['contrast'] < 35:
-        f.append('tương phản thấp')
-    if m['noise_sigma'] > 6:
-        f.append('nhiễu')
-    if m['glare_%'] > 1:
-        f.append('chói/phản xạ')
-    if m['piece_px_imgsz'] == m['piece_px_imgsz'] and m['piece_px_imgsz'] < 25:
-        f.append('quân cờ nhỏ ở imgsz=%d' % imgsz)
-    return f
+        """
+        末端执行器的topic
+        """
+        self.end_effector_servo_pubs = []
+        self.end_effector_servo_subs = []
+        # 末端的几个小的topic
+        for i in range(1, 3):
+            pub = rospy.Publisher('/jetmax/end_effector/servo{}/status'.format(i), UInt8, queue_size=1)
+            cmd = rospy.Subscriber('/jetmax/end_effector/servo{}/command'.format(i), SetServo,
+                                   queue_size=1,
+                                   callback_args=i - 1,
+                                   callback=lambda msg, servo_id: self.pwm_servos[servo_id].set_position(msg.data,
+                                                                                                         msg.duration))
+            self.end_effector_servo_pubs.append(pub)
+            self.end_effector_servo_subs.append(cmd)
 
+        self.sucker = hiwonder.Sucker()
+        # 末端吸嘴的topic
+        self.sucker_pub = rospy.Publisher('/jetmax/end_effector/sucker/status', Bool, queue_size=1)
+        self.sucker_sub = rospy.Subscriber('/jetmax/end_effector/sucker/command', Bool,
+                                           queue_size=1,
+                                           callback=lambda msg: self.sucker.set_state(msg.data))
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('folder')
-    ap.add_argument('--imgsz', type=int, default=640, help='kích thước đầu vào mô hình YOLO sẽ dùng')
-    a = ap.parse_args()
+        # 回初始位置的topic
+        self.go_home_srv = rospy.Service('/jetmax/go_home', Empty, self.go_home)
+        self.action_set = action_set.ActionSetRunner(self.jetmax, self.sucker)
 
-    rows, groups = [], {}
-    for root, _, files in os.walk(a.folder):
-        group = os.path.relpath(root, a.folder)
-        for fn in sorted(files):
-            if not fn.lower().endswith(EXTS):
-                continue
-            m = analyze(os.path.join(root, fn), a.imgsz)
-            if m is None:
-                continue
-            m['file'], m['group'] = fn, group
-            m['flags'] = ';'.join(flags(m, a.imgsz))
-            rows.append(m)
-            groups.setdefault(group, []).append(m)
-    if not rows:
-        print('Không tìm thấy ảnh trong', a.folder)
-        return
+        self.rate = rospy.Rate(10)  # 10hz
+        self.go_home() # 让机械臂回初始位置
 
-    keys = ['group', 'file', 'width', 'height', 'sharp_lap', 'sharp_ten', 'brightness', 'contrast',
-            'dark_clip_%', 'bright_clip_%', 'glare_%', 'saturation', 'r_over_g', 'b_over_g',
-            'noise_sigma', 'n_circles', 'piece_px_640', 'piece_px_imgsz', 'flags']
-    out = os.path.join(a.folder, 'quality_report.csv')
-    with open(out, 'w', newline='', encoding='utf-8-sig') as f:
-        w = csv.DictWriter(f, fieldnames=keys)
-        w.writeheader()
-        for m in rows:
-            w.writerow({k: ('%.2f' % m[k] if isinstance(m[k], float) else m[k]) for k in keys})
+    def go_home(self, req=None):
+        self.jetmax.go_home(2)
+        return []
 
-    print('%-14s %4s %8s %7s %7s %7s %7s %7s %9s' % (
-        'nhóm', 'ảnh', 'độ nét', 'sáng', 'tương', 'nhiễu', 'chói%', 'R/G', 'quân(px)'))
-    for g, ms in sorted(groups.items()):
-        avg = lambda k: float(np.nanmean([m[k] for m in ms])) if not all(m[k] != m[k] for m in ms) else float('nan')
-        print('%-14s %4d %8.1f %7.1f %7.1f %7.2f %7.2f %7.2f %9.1f' % (
-            g, len(ms), avg('sharp_lap'), avg('brightness'), avg('contrast'), avg('noise_sigma'),
-            avg('glare_%'), avg('r_over_g'), avg('piece_px_imgsz')))
-        bad = {}
-        for m in ms:
-            for fl in m['flags'].split(';'):
-                if fl:
-                    bad[fl] = bad.get(fl, 0) + 1
-        if bad:
-            print('   cảnh báo:', ', '.join('%s (%d/%d ảnh)' % (k, v, len(ms)) for k, v in bad.items()))
-    print('\nĐã lưu chi tiết từng ảnh:', out)
-    print('Độ phân giải ảnh đầu tiên: %dx%d' % (rows[0]['width'], rows[0]['height']))
+    def update(self):
+        while not rospy.is_shutdown():
+            """
+            更新麦轮底盘的状态
+            """
+            if self.chassis:
+                mecanum_status = Mecanum(
+                    velocity=self.chassis.velocity,
+                    direction=self.chassis.direction,
+                    angular_rate=self.chassis.angular_rate
+                )
+                self.mecanum_pub.publish(mecanum_status)
+
+            """
+            更新末端执行器的状态
+            """
+            pwm_servo_states = []
+            for i in range(2):
+                servo_state = UInt8(data=int(self.pwm_servos[i].get_position()))
+                self.end_effector_servo_pubs[i].publish(servo_state)
+                pwm_servo_states.append(servo_state)
+            self.sucker_pub.publish(self.sucker.get_state())
+
+            """
+            更新机械臂的状态
+            """
+            servo_states = []
+            joint_states = []
+            for i in range(3):
+                servo_state = int(self.jetmax.servos[i])
+                joint_state = self.jetmax.joints[i]
+                self.jetmax_servo_pubs[i].publish(UInt16(data=servo_state))
+                self.jetmax_joint_pubs[i].publish(Float32(data=joint_state))
+                servo_states.append(servo_state)
+                joint_states.append(joint_state)
+            x, y, z = self.jetmax.position
+            self.jetmax_pub.publish(JetMaxState(
+                x=x, y=y, z=z,
+                joint1=joint_states[0], joint2=joint_states[1], joint3=joint_states[2],
+                servo1=servo_states[0], servo2=servo_states[1], servo3=servo_states[2],
+                pwm1=hiwonder.pwm_servo1.get_position(), pwm2=hiwonder.pwm_servo2.get_position(),
+                sucker=self.sucker.get_state()
+            ))
+
+            self.rate.sleep()
 
 
 if __name__ == '__main__':
-    main()
+    jetmax = JetMaxControl()
+    # joystick.jetmax = jetmax.jetmax
+    # joystick.sucker = jetmax.sucker
+    try:
+        #    threading.Thread(target=joystick.joystick_loop, daemon=True).start()
+        jetmax.update()
+    except rospy.ROSInterruptException:
+        pass
 ```
 
 ---
 
-## Nhóm 4: Tổng quan dự án
+## Nhóm 7: Tổng quan dự án
 
 ### `README.md`
 
