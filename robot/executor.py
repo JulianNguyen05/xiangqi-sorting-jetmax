@@ -37,7 +37,7 @@ class Tray(object):
     @classmethod
     def load(cls, path):
         import yaml
-        with open(path) as f:
+        with open(path, encoding='utf-8') as f:
             d = (yaml.safe_load(f) or {}).get('tray') or {}
         need = [k for k in ('slider', 'x', 'y') if d.get(k) is None]
         if need:
@@ -158,9 +158,12 @@ class JetMaxExecutor(RobotExecutor):
         except Exception as e:
             self.log('Không nâng được tay máy (%s), hãy kiểm tra thủ công' % e)
 
-    def reset(self):
-        """Gọi sau khi đã tự xếp lại bàn cờ vật lý cho khớp với game.pos."""
+    def reset(self, tray_used=None):
+        """Gọi sau khi đã tự xếp lại bàn cờ vật lý cho khớp với game.pos.
+        tray_used: số quân đang thực sự nằm trong khay (nếu bạn đã lấy quân ra khỏi khay để trả về bàn cờ)."""
         self.broken = None
+        if tray_used is not None:
+            self.tray_used = max(0, min(int(tray_used), self.tray.capacity))
 
     def reset_tray(self):
         """Gọi sau khi đã dọn hết quân trong khay."""

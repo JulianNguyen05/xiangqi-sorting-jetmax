@@ -106,7 +106,7 @@ class MultiViewMapper(object):
     @classmethod
     def load(cls, path):
         import yaml
-        with open(path) as f:
+        with open(path, encoding='utf-8') as f:
             d = yaml.safe_load(f) or {}
         size = d.get('image_size') or [640, 480]
         views = [View(v['name'], v['points'], size, v.get('slider'), v.get('arm'),
