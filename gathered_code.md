@@ -1,41 +1,41 @@
 # GATHERED SOURCE CODE - XIANGQI SORTING JETMAX
 
 - **Thư mục gốc:** `D:\2026_2027\Chuyen-de\xiangqi-sorting-jetmax`
-- **Tổng số file đã gôm:** 13
+- **Tổng số file đã gôm:** 20
 
 ## Mục lục
 
-### Nhóm 1: Core Robot (Board, Detect View, Motion)
+### Nhóm 1: Lõi hệ thống (bắt buộc)
 - [robot\board.py](#robotboardpy)
-- [robot\detect_view.py](#robotdetect_viewpy)
+- [robot\vision_board.py](#robotvisionboardpy)
+- [robot\detect_view.py](#robotdetectviewpy)
+- [robot\engine.py](#robotenginepy)
+- [robot\game.py](#robotgamepy)
 - [robot\motion.py](#robotmotionpy)
-
-### Nhóm 2: Cấu hình hệ thống (Configs)
+- [robot\xiangqi_rules.py](#robotxiangqirulespy)
 - [configs\board.yaml](#configsboardyaml)
+- [configs\vision.yaml](#configsvisionyaml)
 
-### Nhóm 3: Test Scripts & Kịch bản thử nghiệm
-- [tests\move_piece.py](#testsmove_piecepy)
-- [tests\pick_place.py](#testspick_placepy)
-- [tests\scan_detect.py](#testsscan_detectpy)
+### Nhóm 2: Cách bạn đang điều khiển tay và chạy mô phỏng
+- [tests\play_sim.py](#testsplaysimpy)
+- [tests\fake_uci_engine.py](#testsfakeucienginepy)
+- [tests\scan_detect.py](#testsscandetectpy)
+- [tests\move_piece.py](#testsmovepiecepy)
+- [tests\pick_place.py](#testspickplacepy)
+- [tests\joint_teleop.py](#testsjointteleoppy)
 
-### Nhóm 4: Huấn luyện, Cấu trúc Class & Dataset
-- [training\README.md](#trainingreadmemd)
-- [training\build_dataset.ipynb](#trainingbuild_datasetipynb)
-- [training\train_yolo11.ipynb](#trainingtrain_yolo11ipynb)
+### Nhóm 3: Tham chiếu SDK của robot (để viết motion.py đúng API)
+- [docs\robot-reference\waste_classification_stepper.py](#docsrobot-referencewasteclassificationstepperpy)
+- [docs\robot-reference\jetmax_control\scripts\jetmax_control_main.py](#docsrobot-referencejetmaxcontrolscriptsjetmaxcontrolmainpy)
 
-### Nhóm 5: Cấu hình danh sách Class & Dataset Config
-  *(Không tìm thấy file nào)*
-
-### Nhóm 6: Reference Scripts & API mẫu
-- [docs\robot-reference\waste_classification_stepper.py](#docsrobot-referencewaste_classification_stepperpy)
-- [docs\robot-reference\jetmax_control\scripts\jetmax_control_main.py](#docsrobot-referencejetmax_controlscriptsjetmax_control_mainpy)
-
-### Nhóm 7: Tổng quan dự án
+### Nhóm 4: Chỉ gửi nếu tôi hỏi thêm
+- [tests\test_game.py](#teststestgamepy)
+- [tests\test_rules.py](#teststestrulespy)
 - [README.md](#readmemd)
 
 ---
 
-## Nhóm 1: Core Robot (Board, Detect View, Motion)
+## Nhóm 1: Lõi hệ thống (bắt buộc)
 
 ### `robot\board.py`
 
@@ -100,6 +100,120 @@ class Board:
         w = ((1 - u) * (1 - v), u * (1 - v), (1 - u) * v, u * v)
         p = [sum(w[i] * self.c[CORNERS[i]][k] for i in range(4)) for k in range(3)]
         return int(round(p[0])), round(p[1], 1), round(p[2], 1)
+```
+
+---
+
+### `robot\vision_board.py`
+
+*Dung lượng: 5.08 KB | Số dòng: 105*
+
+```python
+#!/usr/bin/env python3
+# Chuyển kết quả nhận diện YOLO (khung + lớp) thành bàn cờ {(cột, hàng): 'R'} để đưa vào game.py.
+#
+# Cách làm: dùng 4 góc bàn cờ trong ẢNH (pixel tại giao điểm a0, i0, a9, i9) để tính phép biến đổi phối cảnh sang lưới
+# 9x10 ô; tâm mỗi khung quân cờ được đổi sang toạ độ lưới rồi làm tròn về giao điểm gần nhất.
+# Cần điền configs/vision.yaml. Camera phải ở MỘT TƯ THẾ CỐ ĐỊNH nhìn thấy cả bàn cờ (nếu camera gắn trên tay máy thì
+# phải đưa tay máy về đúng tư thế quan sát này mỗi lần chụp, vì 4 góc chỉ đúng cho tư thế đó).
+#
+# Định dạng đầu vào khớp với robot/detect_view.py: mỗi quân là (x1, y1, x2, y2, conf, cls_id) và `names[cls_id]` là
+# 'red_rook', 'black_cannon', ... (đúng thứ tự 14 lớp trong training/build_dataset.ipynb).
+
+import numpy as np
+
+CORNER_KEYS = ('a0', 'i0', 'a9', 'i9')
+PIECE_CODE = {'advisor': 'a', 'bishop': 'b', 'cannon': 'c', 'king': 'k', 'knight': 'n', 'pawn': 'p', 'rook': 'r'}
+
+
+def class_to_piece(name):
+    """'red_rook' -> 'R', 'black_cannon' -> 'c'. Trả về None nếu tên lạ."""
+    try:
+        color, kind = name.strip().lower().split('_', 1)
+    except ValueError:
+        return None
+    code = PIECE_CODE.get(kind)
+    if code is None or color not in ('red', 'black'):
+        return None
+    return code.upper() if color == 'red' else code
+
+
+def _homography(src, dst):
+    a, b = [], []
+    for (x, y), (u, v) in zip(src, dst):
+        a.append([x, y, 1, 0, 0, 0, -u * x, -u * y])
+        a.append([0, 0, 0, x, y, 1, -v * x, -v * y])
+        b += [u, v]
+    h = np.linalg.solve(np.array(a, dtype=np.float64), np.array(b, dtype=np.float64))
+    return np.append(h, 1.0).reshape(3, 3)
+
+
+class ImageBoardMapper(object):
+    def __init__(self, image_corners, max_offset=0.35, anchor_y=0.5):
+        """image_corners: {'a0': (x, y), 'i0': ..., 'a9': ..., 'i9': ...} (pixel).
+        max_offset: quân lệch tâm giao điểm quá mức này (đơn vị ô) thì bỏ (đang bị cầm hoặc nằm giữa hai ô).
+        anchor_y: vị trí lấy điểm trong khung theo chiều dọc, 0.5 = tâm khung, 1.0 = cạnh dưới."""
+        miss = [k for k in CORNER_KEYS if k not in image_corners or image_corners[k] is None]
+        if miss:
+            raise ValueError('Chưa điền góc ảnh: %s (x, y pixel) trong configs/vision.yaml' % ', '.join(miss))
+        src = [tuple(float(v) for v in image_corners[k]) for k in CORNER_KEYS]
+        dst = [(0.0, 0.0), (8.0, 0.0), (0.0, 9.0), (8.0, 9.0)]
+        self.H = _homography(src, dst)
+        self.max_offset = float(max_offset)
+        self.anchor_y = float(anchor_y)
+
+    @classmethod
+    def load(cls, path):
+        import yaml
+        with open(path) as f:
+            d = yaml.safe_load(f) or {}
+        return cls(d.get('image_corners') or {}, d.get('max_offset', 0.35), d.get('anchor_y', 0.5))
+
+    def to_grid(self, x, y):
+        v = self.H.dot(np.array([x, y, 1.0]))
+        return v[0] / v[2], v[1] / v[2]
+
+    def board_from_detections(self, dets, names):
+        """Trả về (bàn cờ {(f, r): ký tự}, danh sách cảnh báo)."""
+        board, conf_at, warns = {}, {}, []
+        for x1, y1, x2, y2, conf, cls in dets:
+            k = int(cls)
+            name = names[k] if k < len(names) else str(k)
+            piece = class_to_piece(name)
+            if piece is None:
+                warns.append('lớp lạ "%s"' % name)
+                continue
+            gf, gr = self.to_grid((x1 + x2) / 2.0, y1 + (y2 - y1) * self.anchor_y)
+            f, r = int(round(gf)), int(round(gr))
+            if not (0 <= f < 9 and 0 <= r < 10):
+                warns.append('%s ngoài bàn cờ' % name)
+                continue
+            if abs(gf - f) > self.max_offset or abs(gr - r) > self.max_offset:
+                warns.append('%s lệch tâm ô (%.2f, %.2f)' % (name, gf - f, gr - r))
+                continue
+            if (f, r) in board:
+                warns.append('hai quân cùng một ô (%d,%d), giữ quân tin cậy hơn' % (f, r))
+                if conf <= conf_at[(f, r)]:
+                    continue
+            board[(f, r)] = piece
+            conf_at[(f, r)] = conf
+        return board, warns
+
+
+class BoardObserver(object):
+    """Ghép camera + YOLO + ánh xạ ô + gộp khung hình thành hàm observe() cho game.play().
+      detector   : đối tượng từ detect_view.load_backend(...) (gọi detector(bgr) -> Nx6, có thuộc tính .names)
+      grab_frame : hàm không tham số trả về ảnh BGR mới nhất (ví dụ dùng cách đọc topic /usb_cam trong scan_detect.py)
+      stabilizer : game.BoardStabilizer"""
+
+    def __init__(self, detector, grab_frame, mapper, stabilizer):
+        self.detector, self.grab_frame, self.mapper, self.stab = detector, grab_frame, mapper, stabilizer
+        self.last_warnings = []
+
+    def __call__(self):
+        dets = self.detector(self.grab_frame())
+        board, self.last_warnings = self.mapper.board_from_detections(dets, self.detector.names)
+        return self.stab.update(board)
 ```
 
 ---
@@ -362,6 +476,484 @@ if __name__ == '__main__':
 
 ---
 
+### `robot\engine.py`
+
+*Dung lượng: 10.30 KB | Số dòng: 241*
+
+```python
+#!/usr/bin/env python3
+# Engine chọn nước đi cho robot. Hai lựa chọn, cùng giao diện:   move = engine.choose(position)
+#
+#   UciEngine    : chạy Pikafish (engine cờ tướng mã nguồn mở, giao tiếp UCI) như một tiến trình con.
+#                  Đã cấu hình NHẸ cho Jetson: 1 luồng, hash 16 MB, giới hạn độ sâu + thời gian suy nghĩ.
+#                  Cần: file chạy `pikafish` (bản build cho aarch64/ARM64) và file mạng `pikafish.nnue`
+#                  để cạnh file chạy (hoặc truyền --nnue).
+#   SimpleEngine : tìm kiếm alpha-beta độ sâu 2-3 tự viết, chỉ tính điểm theo quân. Không cần cài gì, dùng để thử
+#                  logic khi chưa có Pikafish, hoặc dự phòng nếu Pikafish lỗi.
+#
+# "Mức dễ" được làm bằng cách cho engine trả về nhiều nước tốt nhất (MultiPV), rồi với một xác suất nhất định chọn
+# NGẪU NHIÊN trong các nước không tệ hơn nước tốt nhất quá `margin` (đơn vị centipawn, 100 ~ một tốt).
+# Cách này không phụ thuộc phiên bản engine nên mức khó dễ chỉnh được ngay trong LEVELS bên dưới.
+
+import os, re, sys, random, subprocess, threading, time
+try:
+    import queue
+except ImportError:           # Python 2 (không dùng, để cho chắc)
+    import Queue as queue
+
+from xiangqi_rules import Position, RED, BLACK, has_crossed, parse_uci, move_uci
+
+LEVELS = {
+    #          độ sâu  thời gian(ms)  số nước ứng viên  chênh lệch tối đa  xác suất đi "lệch"
+    'easy':   dict(depth=1, movetime=800, multipv=5, margin=200, p_random=0.40, simple_depth=2),
+    'normal': dict(depth=3, movetime=1500, multipv=3, margin=100, p_random=0.20, simple_depth=2),
+    'hard':   dict(depth=8, movetime=3000, multipv=1, margin=0, p_random=0.0, simple_depth=3),
+}
+MATE = 30000
+
+
+def _pick(cands, cfg, rng):
+    """cands: [(move, score)] đã sắp theo điểm giảm dần. Chọn nước theo mức độ."""
+    best = cands[0][1]
+    if len(cands) > 1 and cfg['p_random'] > 0 and rng.random() < cfg['p_random']:
+        pool = [m for m, s in cands if s >= best - cfg['margin']]
+        return rng.choice(pool)
+    return cands[0][0]
+
+
+# ------------------------------------------------------------------ Pikafish -----
+class UciEngine(object):
+    def __init__(self, path, level='easy', nnue=None, threads=1, hash_mb=16, seed=None, startup_timeout=30.0,
+                 args=None):
+        if level not in LEVELS:
+            raise ValueError('level phải là một trong %s' % sorted(LEVELS))
+        self.cfg = LEVELS[level]
+        self.rng = random.Random(seed)
+        self.name = 'pikafish(%s)' % level
+        path = os.path.abspath(os.path.expanduser(path))
+        if not os.path.exists(path):
+            raise IOError('Không thấy engine: %s' % path)
+        self.proc = subprocess.Popen([path] + list(args or []), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1,
+                                     cwd=os.path.dirname(path))
+        self.q = queue.Queue()
+        t = threading.Thread(target=self._reader)
+        t.daemon = True
+        t.start()
+        self._send('uci')
+        lines = self._read_until(lambda l: l.strip() == 'uciok', startup_timeout)
+        self.options = set()
+        for l in lines:
+            m = re.match(r'option name (.+?) type', l.strip())
+            if m:
+                self.options.add(m.group(1))
+        self._set('Threads', threads)
+        self._set('Hash', hash_mb)
+        self._set('MultiPV', self.cfg['multipv'])
+        if nnue:
+            self._set('EvalFile', os.path.abspath(os.path.expanduser(nnue)))
+        self._send('isready')
+        self._read_until(lambda l: l.strip() == 'readyok', startup_timeout)
+        self._send('ucinewgame')
+
+    # ---- giao tiếp
+    def _reader(self):
+        for line in iter(self.proc.stdout.readline, ''):
+            self.q.put(line)
+        self.q.put(None)
+
+    def _send(self, s):
+        try:
+            self.proc.stdin.write(s + '\n')
+            self.proc.stdin.flush()
+        except (IOError, OSError, ValueError):
+            raise RuntimeError('Engine đã thoát (kiểm tra file nnue và bản build có chạy được trên robot không)')
+
+    def _read_until(self, pred, timeout):
+        end = time.time() + timeout
+        lines = []
+        while True:
+            left = end - time.time()
+            if left <= 0:
+                raise RuntimeError('Engine không trả lời trong %.0f giây' % timeout)
+            try:
+                line = self.q.get(timeout=left)
+            except queue.Empty:
+                raise RuntimeError('Engine không trả lời trong %.0f giây' % timeout)
+            if line is None:
+                raise RuntimeError('Engine đã thoát. Đầu ra cuối: %s' % ' | '.join(l.strip() for l in lines[-5:]))
+            lines.append(line)
+            if pred(line):
+                return lines
+
+    def _set(self, name, value):
+        if name in self.options:
+            self._send('setoption name %s value %s' % (name, value))
+        else:
+            print('CẢNH BÁO: engine không có tùy chọn "%s", bỏ qua' % name, file=sys.stderr)
+
+    # ---- chọn nước
+    def choose(self, pos):
+        legal = pos.legal_moves()
+        if not legal:
+            raise ValueError('Không còn nước đi hợp lệ')
+        c = self.cfg
+        self._send('position fen ' + pos.fen())
+        self._send('go depth %d movetime %d' % (c['depth'], c['movetime']))
+        limit = c['movetime'] / 1000.0 + 10.0
+        try:
+            lines = self._read_until(lambda l: l.startswith('bestmove'), limit)
+        except RuntimeError:
+            self._send('stop')                       # engine chậm hơn dự kiến: ép dừng và lấy kết quả hiện có
+            lines = self._read_until(lambda l: l.startswith('bestmove'), 5.0)
+
+        best = {}                                    # multipv -> (độ sâu, điểm, nước)
+        for l in lines:
+            tok = l.split()
+            if not tok or tok[0] != 'info' or 'pv' not in tok or 'score' not in tok:
+                continue
+            try:
+                d = int(tok[tok.index('depth') + 1]) if 'depth' in tok else 0
+                k = int(tok[tok.index('multipv') + 1]) if 'multipv' in tok else 1
+                i = tok.index('score')
+                v = int(tok[i + 2])
+                score = v if tok[i + 1] == 'cp' else (MATE - abs(v)) * (1 if v > 0 else -1)
+                mv = parse_uci(tok[tok.index('pv') + 1])
+            except (ValueError, IndexError):
+                continue
+            if k not in best or d >= best[k][0]:
+                best[k] = (d, score, mv)
+        legal_set = set(legal)
+        cands = sorted([(mv, s) for d, s, mv in best.values() if mv in legal_set], key=lambda x: -x[1])
+        if not cands:                                # không đọc được info: dùng bestmove
+            for l in lines:
+                if l.startswith('bestmove'):
+                    try:
+                        mv = parse_uci(l.split()[1])
+                        if mv in legal_set:
+                            cands = [(mv, 0)]
+                    except (ValueError, IndexError):
+                        pass
+        if not cands:
+            return self.rng.choice(legal)
+        return _pick(cands, c, self.rng)
+
+    def close(self):
+        try:
+            self._send('quit')
+            self.proc.wait()
+        except Exception:
+            pass
+        try:
+            self.proc.kill()
+        except Exception:
+            pass
+
+
+# ------------------------------------------------------------------ tự viết -----
+VALUE = {'K': 0, 'A': 200, 'B': 200, 'N': 400, 'R': 900, 'C': 450, 'P': 100}
+
+
+def evaluate(pos):
+    """Điểm theo quân, từ góc nhìn của bên đang đến lượt."""
+    s = 0
+    for r in range(10):
+        row = pos.b[r]
+        for f in range(9):
+            p = row[f]
+            if p == '.':
+                continue
+            t = p.upper()
+            v = VALUE[t]
+            if t == 'P' and has_crossed(r, RED if p.isupper() else BLACK):
+                v += 100
+            s += v if p.isupper() else -v
+    return s if pos.turn == RED else -s
+
+
+class SimpleEngine(object):
+    def __init__(self, level='easy', seed=None):
+        if level not in LEVELS:
+            raise ValueError('level phải là một trong %s' % sorted(LEVELS))
+        self.cfg = LEVELS[level]
+        self.depth = self.cfg['simple_depth']
+        self.rng = random.Random(seed)
+        self.name = 'simple(%s, độ sâu %d)' % (level, self.depth)
+
+    def _negamax(self, pos, depth, alpha, beta, ply):
+        if depth == 0:
+            return evaluate(pos)
+        moves = pos.legal_moves()
+        if not moves:
+            return -MATE + ply                       # bên đến lượt hết nước = thua
+        moves.sort(key=lambda m: -VALUE.get(pos.b[m[3]][m[2]].upper(), 0))   # ăn quân trước để cắt tỉa tốt hơn
+        best = -MATE - 1
+        for m in moves:
+            s = -self._negamax(pos.make(m), depth - 1, -beta, -alpha, ply + 1)
+            if s > best:
+                best = s
+            if best > alpha:
+                alpha = best
+            if alpha >= beta:
+                break
+        return best
+
+    def choose(self, pos):
+        moves = pos.legal_moves()
+        if not moves:
+            raise ValueError('Không còn nước đi hợp lệ')
+        self.rng.shuffle(moves)
+        scored = [(m, -self._negamax(pos.make(m), self.depth - 1, -MATE - 1, MATE + 1, 1)) for m in moves]
+        scored.sort(key=lambda x: -x[1])
+        # nếu có nước chiếu bí thì luôn đi, không "đi lệch"
+        if scored[0][1] >= MATE - 10:
+            return scored[0][0]
+        return _pick(scored, self.cfg, self.rng)
+
+    def close(self):
+        pass
+
+
+def create_engine(path=None, level='easy', nnue=None, seed=None):
+    """Có đường dẫn Pikafish thì dùng Pikafish; lỗi hoặc không có thì dùng SimpleEngine (có in cảnh báo)."""
+    if path:
+        try:
+            return UciEngine(path, level=level, nnue=nnue, seed=seed)
+        except Exception as e:
+            print('CẢNH BÁO: không chạy được Pikafish (%s). Dùng engine tự viết thay thế.' % e, file=sys.stderr)
+    return SimpleEngine(level=level, seed=seed)
+```
+
+---
+
+### `robot\game.py`
+
+*Dung lượng: 9.34 KB | Số dòng: 219*
+
+```python
+#!/usr/bin/env python3
+# Logic ván cờ giữa người và robot (thuần Python, không cần ROS, không cần robot).
+#
+#   Người cầm ĐỎ  -> người đi trước, robot cầm ĐEN đi sau.
+#   Người cầm ĐEN -> robot cầm ĐỎ và đi trước.
+#
+# Luồng chạy:
+#   robot đến lượt : engine.choose(thế cờ) -> executor.execute(nước đi) -> cập nhật thế cờ
+#   người đến lượt : observe() trả về bàn cờ nhìn thấy từ camera {(cột, hàng): 'R', ...}
+#                    -> detect_move() so với thế cờ hiện tại để TÌM RA nước người vừa đi (và kiểm tra hợp lệ)
+#
+# Nhận diện nước đi bằng cách thử mọi nước hợp lệ rồi chọn nước cho bàn cờ giống ảnh nhất, nên chịu được việc YOLO
+# bỏ sót/nhận nhầm 1 quân (tolerance) và tự loại các tư thế dở dang (tay che, quân đang cầm lên).
+#
+# Cách nối với robot thật: viết một lớp kế thừa RobotExecutor, trong execute(info) dùng
+#   - info.captured khác None: gắp quân ở info.to đem bỏ ra khay (quân bị ăn) TRƯỚC,
+#   - rồi gắp quân ở info.frm đặt xuống info.to.
+# Ở bước đó có thể dùng Board.position() + Mover.pick()/place() đã có trong robot/board.py và robot/motion.py.
+#
+# Chưa cài: luật cấm chiếu liên tục/đuổi liên tục và hòa 60 nước không ăn quân; chỉ có giới hạn tổng số nước (max_plies).
+
+import time
+from collections import namedtuple
+
+from xiangqi_rules import Position, RED, BLACK, other, move_uci, sq_name, piece_name
+
+MoveInfo = namedtuple('MoveInfo', 'move uci frm to piece captured by')
+DetectResult = namedtuple('DetectResult', 'status move distance candidates')
+# status: 'nochange' (bàn cờ chưa đổi) | 'pending' (đã thấy một nước, chờ xác nhận) | 'move' (đã xác nhận)
+#         'ambiguous' (nhiều nước cùng khớp) | 'invalid' (không nước hợp lệ nào khớp)
+
+
+def make_info(pos, move, by):
+    f1, r1, f2, r2 = move
+    cap = pos.b[r2][f2]
+    return MoveInfo(move, move_uci(move), sq_name(f1, r1), sq_name(f2, r2), pos.b[r1][f1],
+                    None if cap == '.' else cap, by)
+
+
+def describe(info):
+    s = '%s: %s %s -> %s' % ('Robot' if info.by == 'robot' else 'Người', piece_name(info.piece), info.frm, info.to)
+    if info.captured:
+        s += ' (ăn %s)' % piece_name(info.captured)
+    return s
+
+
+# ------------------------------------------------------------------ robot --------
+class RobotError(Exception):
+    pass
+
+
+class RobotExecutor(object):
+    def execute(self, info):
+        """Thực hiện nước đi bằng tay máy. Ném RobotError nếu thất bại (khi đó thế cờ KHÔNG được cập nhật)."""
+        raise NotImplementedError
+
+
+class DryRunExecutor(RobotExecutor):
+    """Chưa có robot: chỉ in các bước sẽ làm."""
+
+    def __init__(self, log=print):
+        self.log = log
+
+    def execute(self, info):
+        if info.captured:
+            self.log('    [robot] gắp %s ở %s -> bỏ ra khay quân bị ăn' % (piece_name(info.captured), info.to))
+        self.log('    [robot] gắp %s ở %s -> đặt xuống %s' % (piece_name(info.piece), info.frm, info.to))
+
+
+# ------------------------------------------------------------------ nhận diện nước đi
+def board_distance(a, b):
+    """Số ô khác nhau (ô sai quân tính 2, thiếu/thừa quân tính 1)."""
+    return len(set(a.items()) ^ set(b.items()))
+
+
+def detect_move(pos, observed, tolerance=1):
+    """So bàn cờ nhìn thấy với thế cờ `pos` (người đang đến lượt) và tìm nước người vừa đi."""
+    prev = pos.to_dict()
+    d_prev = board_distance(prev, observed)
+    if d_prev == 0:
+        return DetectResult('nochange', None, 0, [])
+    scored = []
+    for m in pos.legal_moves():
+        exp = dict(prev)
+        exp[(m[2], m[3])] = exp.pop((m[0], m[1]))
+        scored.append((board_distance(exp, observed), m))
+    if not scored:
+        return DetectResult('invalid', None, d_prev, [])
+    scored.sort()
+    best = scored[0][0]
+    ties = [m for d, m in scored if d == best]
+    if d_prev <= tolerance and d_prev < best:
+        return DetectResult('nochange', None, d_prev, [])      # chỉ là nhiễu nhận diện, người chưa đi
+    if best > tolerance:
+        return DetectResult('invalid', None, best, [])
+    if len(ties) > 1 or d_prev == best:
+        return DetectResult('ambiguous', None, best, [move_uci(m) for m in ties])
+    return DetectResult('move', ties[0], best, [move_uci(ties[0])])
+
+
+class BoardStabilizer(object):
+    """Gộp nhiều khung hình liên tiếp: ô nào có cùng một quân ở đa số khung hình thì mới tin.
+    Trả về None cho tới khi đủ `frames` khung hình, nên tay đang che bàn cờ hay một khung hình hỏng không làm sai nước."""
+
+    def __init__(self, frames=3):
+        self.n = max(1, int(frames))
+        self.buf = []
+
+    def reset(self):
+        self.buf = []
+
+    def update(self, observed):
+        self.buf.append(dict(observed))
+        self.buf = self.buf[-self.n:]
+        if len(self.buf) < self.n:
+            return None
+        need = self.n // 2 + 1
+        count = {}
+        for b in self.buf:
+            for item in b.items():
+                count[item] = count.get(item, 0) + 1
+        return dict(k for k, c in count.items() if c >= need)
+
+
+# ------------------------------------------------------------------ ván cờ ------
+class Game(object):
+    def __init__(self, human='red', engine=None, executor=None, start=None, tolerance=1, confirm=2, max_plies=400):
+        h = str(human).lower()
+        if h not in ('red', 'black', 'w', 'b'):
+            raise ValueError('human phải là "red" hoặc "black"')
+        self.human = RED if h in ('red', 'w') else BLACK
+        self.robot = other(self.human)
+        self.engine = engine
+        self.executor = executor if executor is not None else DryRunExecutor()
+        self.pos = start if start is not None else Position.start()
+        self.tolerance = tolerance
+        self.confirm = max(1, int(confirm))      # số lần liên tiếp phải thấy cùng một nước mới chấp nhận
+        self.max_plies = max_plies
+        self.history = []
+        self._cand = (None, 0)
+
+    def robot_to_move(self):
+        return self.pos.turn == self.robot
+
+    def result(self):
+        """None nếu còn đang chơi, ngược lại (bên thắng hoặc None nếu hòa, lý do)."""
+        if len(self.history) >= self.max_plies:
+            return (None, 'max_plies')
+        r = self.pos.result()
+        if r == 'ongoing':
+            return None
+        return (other(self.pos.turn), r)
+
+    def _apply(self, move, by):
+        info = make_info(self.pos, move, by)
+        self.pos = self.pos.make(move)
+        self.history.append(info)
+        self._cand = (None, 0)
+        return info
+
+    def robot_move(self):
+        if not self.robot_to_move():
+            raise RuntimeError('Chưa đến lượt robot')
+        move = self.engine.choose(self.pos)
+        if not self.pos.is_legal(move):
+            raise RuntimeError('Engine trả nước không hợp lệ: %s' % move_uci(move))
+        info = make_info(self.pos, move, 'robot')
+        self.executor.execute(info)              # lỗi robot -> ngoại lệ, thế cờ giữ nguyên
+        return self._apply(move, 'robot')
+
+    def human_observed(self, observed):
+        """Đưa bàn cờ vừa nhìn thấy vào. Trả về (DetectResult, MoveInfo hoặc None)."""
+        if self.robot_to_move():
+            raise RuntimeError('Đang đến lượt robot')
+        r = detect_move(self.pos, observed, self.tolerance)
+        if r.status != 'move':
+            self._cand = (None, 0)
+            return r, None
+        cand, n = self._cand
+        n = n + 1 if cand == r.move else 1
+        self._cand = (r.move, n)
+        if n < self.confirm:
+            return DetectResult('pending', r.move, r.distance, r.candidates), None
+        return r, self._apply(r.move, 'human')
+
+
+def play(game, observe, log=print, poll=0.3):
+    """Chạy cả ván. observe() trả về dict bàn cờ nhìn thấy, hoặc None nếu chưa có dữ liệu ổn định."""
+    last = None
+    while True:
+        res = game.result()
+        if res is not None:
+            winner, why = res
+            if winner is None:
+                log('HÒA (quá %d nước)' % game.max_plies)
+            else:
+                log('%s THẮNG (%s)' % ('Robot' if winner == game.robot else 'Người', why))
+            return res
+        if game.robot_to_move():
+            log('Robot đang nghĩ...')
+            log(describe(game.robot_move()))
+            log(str(game.pos))
+            last = None
+            continue
+        obs = observe()
+        info = None
+        if obs is not None:
+            r, info = game.human_observed(obs)
+            if info is not None:
+                log(describe(info))
+                log(str(game.pos))
+                last = None
+            elif r.status in ('ambiguous', 'invalid') and r.status != last:
+                log('CẢNH BÁO: %s' % ('nhiều nước cùng khớp %s' % r.candidates if r.status == 'ambiguous'
+                                      else 'bàn cờ không khớp nước hợp lệ nào (độ lệch %d)' % r.distance))
+            if r.status != 'nochange':
+                last = r.status
+        if info is None and poll:
+            time.sleep(poll)
+```
+
+---
+
 ### `robot\motion.py`
 
 *Dung lượng: 5.94 KB | Số dòng: 134*
@@ -505,7 +1097,363 @@ class Mover:
 
 ---
 
-## Nhóm 2: Cấu hình hệ thống (Configs)
+### `robot\xiangqi_rules.py`
+
+*Dung lượng: 12.19 KB | Số dòng: 349*
+
+```python
+#!/usr/bin/env python3
+# Luật cờ tướng thuần Python (không cần ROS, không cần thư viện ngoài, chạy được trên Python 3.6 của Jetson).
+#
+# Quy ước TRÙNG với robot/board.py:
+#   cột a..i = chỉ số 0..8 (trái -> phải nhìn từ phía quân ĐỎ), hàng 0..9 (hàng 0 = phía đỏ, hàng 9 = phía đen).
+#   Nước đi dạng UCI/UCCI "h2e2" = quân ở h2 đi tới e2. Trong code một nước đi là tuple (f1, r1, f2, r2).
+#
+# Ký hiệu quân (giống FEN của Pikafish):  K tướng, A sĩ, B tượng, N mã, R xe, C pháo, P tốt
+#   chữ HOA = quân ĐỎ (đi trước, 'w'), chữ thường = quân ĐEN ('b').
+#
+# Luật đã cài: mã bị cản chân, tượng bị chặn mắt và không qua sông, sĩ/tướng trong cung, tốt qua sông mới đi ngang,
+# pháo ăn qua đúng một quân, hai tướng không được đối mặt (lộ mặt tướng), không được để tướng mình bị chiếu.
+# Hết nước đi hợp lệ = THUA (bị chiếu bí hoặc hết nước đều thua trong cờ tướng).
+# CHƯA cài: luật cấm chiếu liên tục / đuổi liên tục, luật hòa 60 nước không ăn quân (xem ghi chú trong game.py).
+
+FILES = 'abcdefghi'
+RED, BLACK = 'w', 'b'
+EMPTY = '.'
+START_FEN = 'rnbakabnr/9/1c5c1/p1p1p1p1p/9/9/P1P1P1P1P/1C5C1/9/RNBAKABNR w - - 0 1'
+
+ORTH = ((1, 0), (-1, 0), (0, 1), (0, -1))
+DIAG = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+KNIGHT = ((1, 2), (-1, 2), (1, -2), (-1, -2), (2, 1), (2, -1), (-2, 1), (-2, -1))
+PIECES = 'KABNRCPkabnrcp'
+
+
+# ------------------------------------------------------------------ tiện ích ----
+def sq_name(f, r):
+    return '%s%d' % (FILES[f], r)
+
+
+def parse_sq(s):
+    s = s.strip().lower()
+    if len(s) != 2 or s[0] not in FILES or not s[1].isdigit():
+        raise ValueError('Ô "%s" không hợp lệ (cột a-i, hàng 0-9, ví dụ h2)' % s)
+    return FILES.index(s[0]), int(s[1])
+
+
+def move_uci(m):
+    return sq_name(m[0], m[1]) + sq_name(m[2], m[3])
+
+
+def parse_uci(s):
+    s = s.strip().lower().replace(' ', '').replace('-', '')
+    if len(s) != 4:
+        raise ValueError('Nước đi "%s" không hợp lệ (dạng h2e2)' % s)
+    f1, r1 = parse_sq(s[:2])
+    f2, r2 = parse_sq(s[2:])
+    return (f1, r1, f2, r2)
+
+
+def side_of(p):
+    return RED if p.isupper() else BLACK
+
+
+def other(side):
+    return BLACK if side == RED else RED
+
+
+def in_palace(f, r, side):
+    return 3 <= f <= 5 and (0 <= r <= 2 if side == RED else 7 <= r <= 9)
+
+
+def has_crossed(r, side):
+    """Quân đã qua sông chưa (r là hàng hiện tại)."""
+    return r >= 5 if side == RED else r <= 4
+
+
+def _on(f, r):
+    return 0 <= f < 9 and 0 <= r < 10
+
+
+# ------------------------------------------------------------------ thế cờ -----
+class Position(object):
+    """Thế cờ + bên đi. b[r][f] là ký tự quân hoặc '.'."""
+    __slots__ = ('b', 'turn')
+
+    def __init__(self, board=None, turn=RED):
+        self.b = board if board is not None else [[EMPTY] * 9 for _ in range(10)]
+        self.turn = turn
+
+    # ---- tạo / chuyển đổi
+    @classmethod
+    def start(cls):
+        return cls.from_fen(START_FEN)
+
+    @classmethod
+    def from_fen(cls, fen):
+        parts = fen.split()
+        if not parts:
+            raise ValueError('FEN rỗng')
+        rows = parts[0].split('/')
+        if len(rows) != 10:
+            raise ValueError('FEN phải có 10 hàng, nhận được %d' % len(rows))
+        board = [[EMPTY] * 9 for _ in range(10)]
+        for i, row in enumerate(rows):
+            r, f = 9 - i, 0
+            for ch in row:
+                if ch.isdigit():
+                    f += int(ch)
+                elif ch in PIECES:
+                    if f >= 9:
+                        raise ValueError('Hàng FEN quá dài: %s' % row)
+                    board[r][f] = ch
+                    f += 1
+                else:
+                    raise ValueError('Ký tự lạ trong FEN: %s' % ch)
+            if f != 9:
+                raise ValueError('Hàng FEN không đủ 9 cột: %s' % row)
+        turn = BLACK if len(parts) > 1 and parts[1].lower() == 'b' else RED
+        return cls(board, turn)
+
+    @classmethod
+    def from_dict(cls, d, turn=RED):
+        """d = {(f, r): 'R', ...}"""
+        board = [[EMPTY] * 9 for _ in range(10)]
+        for (f, r), p in d.items():
+            board[r][f] = p
+        return cls(board, turn)
+
+    def to_dict(self):
+        return dict(((f, r), self.b[r][f]) for r in range(10) for f in range(9) if self.b[r][f] != EMPTY)
+
+    def fen(self):
+        rows = []
+        for r in range(9, -1, -1):
+            s, n = '', 0
+            for f in range(9):
+                p = self.b[r][f]
+                if p == EMPTY:
+                    n += 1
+                else:
+                    if n:
+                        s += str(n)
+                        n = 0
+                    s += p
+            if n:
+                s += str(n)
+            rows.append(s)
+        return '/'.join(rows) + ' %s - - 0 1' % self.turn
+
+    def copy(self):
+        return Position([row[:] for row in self.b], self.turn)
+
+    def piece_at(self, f, r):
+        p = self.b[r][f]
+        return None if p == EMPTY else p
+
+    def make(self, move):
+        """Trả về thế cờ mới sau nước đi (KHÔNG kiểm tra hợp lệ; dùng is_legal trước nếu cần)."""
+        f1, r1, f2, r2 = move
+        n = self.copy()
+        n.b[r2][f2] = n.b[r1][f1]
+        n.b[r1][f1] = EMPTY
+        n.turn = other(self.turn)
+        return n
+
+    def __str__(self):
+        out = ['    a b c d e f g h i']
+        for r in range(9, -1, -1):
+            out.append('%d   %s' % (r, ' '.join(self.b[r])))
+            if r == 5:
+                out.append('    ~ ~ ~ ~ sông ~ ~ ~ ~')
+        out.append('Lượt: %s' % ('ĐỎ (chữ hoa)' if self.turn == RED else 'ĐEN (chữ thường)'))
+        return '\n'.join(out)
+
+    # ---- sinh nước đi
+    def _targets(self, f, r):
+        """Các ô đến 'giả hợp lệ' (chưa xét bị chiếu) của quân tại (f, r)."""
+        b = self.b
+        p = b[r][f]
+        side = side_of(p)
+        t = p.upper()
+        out = []
+
+        def ok(f2, r2):
+            q = b[r2][f2]
+            return q == EMPTY or side_of(q) != side
+
+        if t == 'R':
+            for df, dr in ORTH:
+                f2, r2 = f + df, r + dr
+                while _on(f2, r2):
+                    q = b[r2][f2]
+                    if q == EMPTY:
+                        out.append((f2, r2))
+                    else:
+                        if side_of(q) != side:
+                            out.append((f2, r2))
+                        break
+                    f2 += df
+                    r2 += dr
+        elif t == 'C':
+            for df, dr in ORTH:
+                f2, r2 = f + df, r + dr
+                while _on(f2, r2) and b[r2][f2] == EMPTY:
+                    out.append((f2, r2))
+                    f2 += df
+                    r2 += dr
+                f2 += df          # bỏ qua quân làm "ngòi"
+                r2 += dr
+                while _on(f2, r2):
+                    q = b[r2][f2]
+                    if q != EMPTY:
+                        if side_of(q) != side:
+                            out.append((f2, r2))
+                        break
+                    f2 += df
+                    r2 += dr
+        elif t == 'N':
+            for df, dr in KNIGHT:
+                f2, r2 = f + df, r + dr
+                if not _on(f2, r2):
+                    continue
+                lf, lr = (f, r + dr // 2) if abs(dr) == 2 else (f + df // 2, r)   # chân mã
+                if b[lr][lf] == EMPTY and ok(f2, r2):
+                    out.append((f2, r2))
+        elif t == 'B':
+            for df, dr in DIAG:
+                f2, r2 = f + 2 * df, r + 2 * dr
+                if not _on(f2, r2):
+                    continue
+                if (r2 > 4) if side == RED else (r2 < 5):      # tượng không qua sông
+                    continue
+                if b[r + dr][f + df] == EMPTY and ok(f2, r2):  # mắt tượng
+                    out.append((f2, r2))
+        elif t == 'A':
+            for df, dr in DIAG:
+                f2, r2 = f + df, r + dr
+                if _on(f2, r2) and in_palace(f2, r2, side) and ok(f2, r2):
+                    out.append((f2, r2))
+        elif t == 'K':
+            for df, dr in ORTH:
+                f2, r2 = f + df, r + dr
+                if _on(f2, r2) and in_palace(f2, r2, side) and ok(f2, r2):
+                    out.append((f2, r2))
+        elif t == 'P':
+            d = 1 if side == RED else -1
+            cand = [(f, r + d)]
+            if has_crossed(r, side):
+                cand += [(f - 1, r), (f + 1, r)]
+            for f2, r2 in cand:
+                if _on(f2, r2) and ok(f2, r2):
+                    out.append((f2, r2))
+        return out
+
+    def _king_sq(self, side):
+        k = 'K' if side == RED else 'k'
+        for r in range(10):
+            for f in range(9):
+                if self.b[r][f] == k:
+                    return f, r
+        return None
+
+    def _king_attacked(self, side):
+        """Tướng của `side` có đang bị chiếu không (kể cả lộ mặt tướng)."""
+        ks = self._king_sq(side)
+        if ks is None:
+            return False
+        kf, kr = ks
+        b = self.b
+        en = other(side)
+        er, ec, eh, ep, ek = ('r', 'c', 'n', 'p', 'k') if side == RED else ('R', 'C', 'N', 'P', 'K')
+        # xe, pháo, và tướng đối mặt theo đường thẳng
+        for df, dr in ORTH:
+            f2, r2 = kf + df, kr + dr
+            while _on(f2, r2) and b[r2][f2] == EMPTY:
+                f2 += df
+                r2 += dr
+            if not _on(f2, r2):
+                continue
+            q = b[r2][f2]
+            if q == er or q == ek:
+                return True
+            f2 += df
+            r2 += dr
+            while _on(f2, r2) and b[r2][f2] == EMPTY:
+                f2 += df
+                r2 += dr
+            if _on(f2, r2) and b[r2][f2] == ec:
+                return True
+        # mã (kiểm tra chân mã tính từ phía mã)
+        for df, dr in KNIGHT:
+            nf, nr = kf + df, kr + dr
+            if not _on(nf, nr) or b[nr][nf] != eh:
+                continue
+            if abs(dr) == 2:
+                lf, lr = nf, nr + (-dr) // 2
+            else:
+                lf, lr = nf + (-df) // 2, nr
+            if b[lr][lf] == EMPTY:
+                return True
+        # tốt: đánh thẳng tới, hoặc đánh ngang nếu đã qua sông
+        d_e = 1 if en == RED else -1
+        if _on(kf, kr - d_e) and b[kr - d_e][kf] == ep:
+            return True
+        if has_crossed(kr, en):
+            for sf in (kf - 1, kf + 1):
+                if _on(sf, kr) and b[kr][sf] == ep:
+                    return True
+        return False
+
+    def legal_moves(self):
+        side = self.turn
+        b = self.b
+        res = []
+        for r in range(10):
+            for f in range(9):
+                p = b[r][f]
+                if p == EMPTY or side_of(p) != side:
+                    continue
+                for f2, r2 in self._targets(f, r):
+                    cap = b[r2][f2]
+                    b[r2][f2] = p
+                    b[r][f] = EMPTY
+                    bad = self._king_attacked(side)
+                    b[r][f] = p
+                    b[r2][f2] = cap
+                    if not bad:
+                        res.append((f, r, f2, r2))
+        return res
+
+    def is_legal(self, move):
+        return tuple(move) in self.legal_moves()
+
+    def in_check(self, side=None):
+        return self._king_attacked(side or self.turn)
+
+    def result(self):
+        """'ongoing' | 'checkmate' | 'stalemate'. Cả hai kết quả cuối đều là bên đang đến lượt THUA."""
+        if self.legal_moves():
+            return 'ongoing'
+        return 'checkmate' if self.in_check() else 'stalemate'
+
+
+# ------------------------------------------------------------------ mô tả nước đi
+PIECE_VN = {'K': 'tướng', 'A': 'sĩ', 'B': 'tượng', 'N': 'mã', 'R': 'xe', 'C': 'pháo', 'P': 'tốt'}
+
+
+def piece_name(p):
+    return '%s %s' % (PIECE_VN[p.upper()], 'đỏ' if p.isupper() else 'đen')
+
+
+def perft(pos, depth):
+    """Đếm số nút lá, dùng để kiểm tra luật (xem tests/test_rules.py)."""
+    moves = pos.legal_moves()
+    if depth <= 1:
+        return len(moves)
+    return sum(perft(pos.make(m), depth - 1) for m in moves)
+```
+
+---
 
 ### `configs\board.yaml`
 
@@ -531,7 +1479,407 @@ z_safe: 50.0    # z khi di chuyển ngang (phải >= 40 để thanh trượt đ�
 
 ---
 
-## Nhóm 3: Test Scripts & Kịch bản thử nghiệm
+### `configs\vision.yaml`
+
+*Dung lượng: 1011 B | Số dòng: 13*
+
+```yaml
+# Hiệu chuẩn ảnh camera -> ô cờ (dùng cho robot/vision_board.py). Đơn vị: PIXEL trong ảnh camera.
+# Đặt camera ở một tư thế cố định nhìn thấy toàn bộ bàn cờ, chụp một ảnh, rồi đọc toạ độ pixel (x, y) của TÂM
+# giao điểm ở bốn góc (mở ảnh bằng trình xem có hiển thị toạ độ chuột, ví dụ Paint/GIMP).
+# Quy ước ô giống configs/board.yaml: a0/i0 là hai góc phía quân ĐỎ, a9/i9 là hai góc phía quân ĐEN,
+# cột a..i từ trái sang phải nhìn từ phía quân đỏ. Ảnh bị xoay/lật thế nào cũng được, vì ánh xạ dựa vào 4 góc này.
+image_corners:
+  a0: null     # ví dụ: [112, 438]
+  i0: null
+  a9: null
+  i9: null
+
+max_offset: 0.35   # quân lệch tâm giao điểm quá 0.35 ô thì bỏ qua (đang bị cầm lên, nằm giữa hai ô)
+anchor_y: 0.5      # 0.5 = lấy tâm khung nhận diện; tăng về 1.0 nếu camera nhìn nghiêng nhiều (lấy gần chân quân hơn)
+```
+
+---
+
+## Nhóm 2: Cách bạn đang điều khiển tay và chạy mô phỏng
+
+### `tests\play_sim.py`
+
+*Dung lượng: 4.82 KB | Số dòng: 102*
+
+```python
+#!/usr/bin/env python3
+# Chơi thử cả ván với robot GIẢ LẬP, không cần robot/camera/ROS.
+# Bàn cờ "vật lý" được mô phỏng: robot đi xong thì bàn cờ vật lý đổi theo, người đi (gõ tay hoặc ngẫu nhiên) thì bàn cờ
+# vật lý đổi, rồi bàn cờ được đưa qua đúng đường nhận diện thật (có thể thêm nhiễu: bỏ sót quân như YOLO) để
+# game.detect_move tìm ra nước người vừa đi.
+#
+#   python3 tests/play_sim.py --human red                       # bạn cầm ĐỎ đi trước, gõ nước dạng h2e2 (q = thoát)
+#   python3 tests/play_sim.py --human black                     # bạn cầm ĐEN, robot cầm ĐỎ đi trước
+#   python3 tests/play_sim.py --human red --auto --noise 0.03   # người đi ngẫu nhiên, 3% quân bị bỏ sót mỗi khung hình
+#   python3 tests/play_sim.py --level normal --engine ~/pikafish/pikafish --nnue ~/pikafish/pikafish.nnue
+# Gõ "?" khi đến lượt bạn để xem các nước hợp lệ.
+
+import os, sys, random, argparse
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, '..', 'robot')]
+
+from xiangqi_rules import Position, parse_uci, move_uci
+from engine import create_engine, LEVELS
+from game import Game, DryRunExecutor, play
+
+
+class Sim(DryRunExecutor):
+    """Vừa là 'robot' (execute), vừa là 'camera' (observe) của bàn cờ vật lý mô phỏng."""
+
+    def __init__(self, noise=0.0, auto=False, rng=None, log=print):
+        DryRunExecutor.__init__(self, log)
+        self.noise, self.auto, self.rng = noise, auto, rng or random.Random()
+        self.physical = Position.start()
+        self.game = None
+        self.calls = 0
+
+    def execute(self, info):                      # robot đi: bàn cờ vật lý đổi theo
+        DryRunExecutor.execute(self, info)
+        self.physical = self.physical.make(info.move)
+
+    def _human_move(self):
+        legal = self.physical.legal_moves()
+        if self.auto:
+            return self.rng.choice(legal)
+        while True:
+            s = input('Nước đi của bạn (vd h2e2, ? = gợi ý, q = thoát): ').strip().lower()
+            if s in ('q', 'quit', 'exit'):
+                raise KeyboardInterrupt
+            if s == '?':
+                self.log(' '.join(sorted(move_uci(m) for m in legal)))
+                continue
+            try:
+                m = parse_uci(s)
+            except ValueError as e:
+                self.log('LỖI: %s' % e)
+                continue
+            if m in legal:
+                return m
+            self.log('Nước %s không hợp lệ' % s)
+
+    def observe(self):
+        if self.game.pos.fen() == self.physical.fen():    # robot đã tin thế cờ này và người CHƯA đi -> người đi
+            self.calls = 0
+            self.physical = self.physical.make(self._human_move())
+        self.calls += 1
+        if self.calls > 500:
+            raise RuntimeError('Nhận diện mãi không ra nước người vừa đi (nhiễu quá lớn?)')
+        return dict((sq, p) for sq, p in self.physical.to_dict().items() if self.rng.random() >= self.noise)
+
+
+def build(human, engine_path=None, level='easy', nnue=None, noise=0.0, auto=False, seed=None,
+          max_plies=400, log=print):
+    rng = random.Random(seed)
+    sim = Sim(noise, auto, rng, log)
+    eng = create_engine(engine_path, level, nnue, seed)
+    game = Game(human, eng, sim, max_plies=max_plies)
+    sim.game = game
+    return game, sim
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--human', choices=['red', 'black'], default='red', help='màu quân của người chơi')
+    ap.add_argument('--level', choices=sorted(LEVELS), default='easy')
+    ap.add_argument('--engine', help='đường dẫn file chạy Pikafish (bỏ trống = engine tự viết)')
+    ap.add_argument('--nnue', help='đường dẫn pikafish.nnue (nếu không nằm cạnh file chạy)')
+    ap.add_argument('--auto', action='store_true', help='người chơi đi ngẫu nhiên (để chạy thử tự động)')
+    ap.add_argument('--noise', type=float, default=0.0, help='xác suất bỏ sót mỗi quân ở mỗi khung hình (0-1)')
+    ap.add_argument('--seed', type=int, default=None)
+    ap.add_argument('--max-plies', type=int, default=400)
+    a = ap.parse_args()
+
+    game, sim = build(a.human, a.engine, a.level, a.nnue, a.noise, a.auto, a.seed, a.max_plies)
+    print('Người cầm %s, robot cầm %s (%s). Engine: %s' % (
+        'ĐỎ' if a.human == 'red' else 'ĐEN', 'ĐEN' if a.human == 'red' else 'ĐỎ',
+        'người đi trước' if a.human == 'red' else 'robot đi trước', game.engine.name))
+    print(game.pos)
+    try:
+        play(game, sim.observe, poll=0)
+    except KeyboardInterrupt:
+        print('\nDừng theo yêu cầu')
+    finally:
+        game.engine.close()
+
+
+if __name__ == '__main__':
+    main()
+```
+
+---
+
+### `tests\fake_uci_engine.py`
+
+*Dung lượng: 1.99 KB | Số dòng: 46*
+
+```python
+#!/usr/bin/env python3
+# Engine UCI GIẢ (không phải Pikafish) dùng để kiểm thử robot/engine.py::UciEngine mà không cần cài Pikafish.
+# Nó in đúng dạng dòng "option", "info ... multipv ... score ... pv ...", "bestmove" như Pikafish: nước tốt nhất
+# là nước đầu tiên trong danh sách hợp lệ, các nước sau điểm thấp dần.
+import os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [os.path.join(HERE, '..', 'robot')]
+from xiangqi_rules import Position, move_uci
+
+pos, multipv = Position.start(), 1
+
+
+def out(s):
+    sys.stdout.write(s + '\n')
+    sys.stdout.flush()
+
+
+for line in sys.stdin:
+    tok = line.split()
+    if not tok:
+        continue
+    if tok[0] == 'uci':
+        out('id name FakeFish')
+        out('option name Threads type spin default 1 min 1 max 1024')
+        out('option name Hash type spin default 16 min 1 max 33554432')
+        out('option name MultiPV type spin default 1 min 1 max 500')
+        out('option name EvalFile type string default pikafish.nnue')
+        out('uciok')
+    elif tok[0] == 'isready':
+        out('readyok')
+    elif tok[0] == 'setoption':
+        if 'MultiPV' in tok:
+            multipv = int(tok[-1])
+    elif tok[0] == 'position' and tok[1] == 'fen':
+        pos = Position.from_fen(' '.join(tok[2:]))
+    elif tok[0] == 'go':
+        moves = pos.legal_moves()
+        out('info string fake engine')
+        for k in range(min(multipv, len(moves))):
+            out('info depth 1 seldepth 1 multipv %d score cp %d nodes 10 nps 1000 time 1 pv %s' % (
+                k + 1, 10 - 100 * k, move_uci(moves[len(moves) - 1 - k])))        # depth 1: nước "sai" (đảo thứ tự)
+            out('info depth 2 seldepth 3 multipv %d score cp %d nodes 99 nps 1000 time 2 pv %s %s' % (
+                k + 1, 50 - 100 * k, move_uci(moves[k]), move_uci(moves[(k + 1) % len(moves)])))
+        out('bestmove %s ponder %s' % (move_uci(moves[0]), move_uci(moves[1 % len(moves)])))
+    elif tok[0] == 'quit':
+        break
+```
+
+---
+
+### `tests\scan_detect.py`
+
+*Dung lượng: 8.53 KB | Số dòng: 203*
+
+```python
+#!/usr/bin/env python3
+# Quét + nhận diện: thanh trượt -> tay máy -> chụp ảnh -> YOLO11 nhận diện, tại từng điểm dừng.
+# Ghép từ scan_capture.py (điều khiển, giới hạn an toàn) và detect_view.py (mô hình).
+# CHƯA gắp quân cờ; chỉ di chuyển, chụp, nhận diện, vẽ và ghi kết quả.
+#
+# Đặt scan_detect.py CÙNG THƯ MỤC với detect_view.py (file này import từ đó).
+# Yêu cầu: node jetmax_control và usb_cam đang chạy.
+#
+# Ví dụ:
+#   python3 scan_detect.py --model ~/models/best.onnx
+#   python3 scan_detect.py --model ~/models/best.onnx --sliders 0 1500 3000 --conf 0.4
+#   python3 scan_detect.py --model ~/models/best.onnx --yes          # không hỏi Enter mỗi điểm
+#
+# Kết quả trong ~/scan_detect/<thời điểm chạy>/ :
+#   raw_*.jpg (ảnh gốc), det_*.jpg (ảnh đã vẽ khung), detections.csv (mỗi dòng 1 quân cờ).
+# Kết thúc/lỗi/q/Ctrl+C: tay máy về chỗ cũ, thanh trượt về 0.
+
+import os, csv, time, argparse
+import cv2
+import numpy as np
+import rospy
+import hiwonder
+from sensor_msgs.msg import Image
+from jetmax_control.msg import SetJetMax, JetMax
+import sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, '..', 'robot')]
+from detect_view import load_backend, draw
+
+TOPIC = '/usb_cam/image_rect_color'
+OUT_ROOT = os.path.expanduser('~/scan_detect')
+
+# ---- Kế hoạch quét (chỉnh ở đây hoặc bằng --sliders) ----
+SLIDER_POS = [0, 1000, 2000]                 # bước từ home
+ARM_OFFSETS = [(0, 0, 0), (20, 0, 0), (-20, 0, 0),
+               (0, 20, 0), (0, -20, 0), (0, 0, -20)]   # mm, tính từ vị trí ban đầu
+DUR = 2.0                                    # giây mỗi lần di chuyển tay máy
+
+# ---- Giới hạn an toàn (giống scan_capture.py / pick_place.py) ----
+SLIDER_MIN, SLIDER_MAX = 0, 5200
+SLIDER_SPEED = 800.0                         # bước/giây, dùng ước lượng thời gian chờ (hãng ghi 1000)
+SLIDER_MIN_Z = 40.0                          # chỉ trượt khi tay máy nâng đủ cao
+X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0
+TOL = 5.0                                    # mm
+
+
+class Stop(Exception):
+    pass
+
+
+state = {'img': None, 'n': 0}
+
+
+def on_image(msg):
+    state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()   # RGB
+    state['n'] += 1
+
+
+def get_pos():
+    m = rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
+    return m.x, m.y, m.z
+
+
+def check_target(x, y, z):
+    ok = (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
+          and (x * x + y * y) ** 0.5 >= R_MIN)
+    if not ok:
+        raise ValueError('Đích (%.1f, %.1f, %.1f) ngoài giới hạn an toàn, bỏ qua' % (x, y, z))
+
+
+def move_arm(pub, target):
+    check_target(*target)
+    pub.publish(SetJetMax(x=target[0], y=target[1], z=target[2], duration=DUR))
+    rospy.sleep(DUR + 0.7)
+    cur = get_pos()
+    if max(abs(cur[i] - target[i]) for i in range(3)) > TOL:
+        print('  CẢNH BÁO: tay máy lệch so với đích (lệnh có thể bị chặn bởi giới hạn)')
+    return cur
+
+
+def move_slider(stepper, pos, new):
+    new = int(max(SLIDER_MIN, min(SLIDER_MAX, new)))
+    d = new - pos
+    if d == 0:
+        return pos
+    if get_pos()[2] < SLIDER_MIN_Z:
+        raise RuntimeError('Tay máy đang thấp hơn z=%d, không trượt' % SLIDER_MIN_Z)
+    stepper.set_mode(stepper.SLEEP)
+    stepper.goto(d)                          # bước TƯƠNG ĐỐI
+    time.sleep(abs(d) / SLIDER_SPEED + 0.5)
+    return new
+
+
+def grab():
+    t0, n0 = time.time(), state['n']
+    while state['n'] < n0 + 2:               # đợi khung hình mới sau khi dừng hẳn
+        if time.time() - t0 > 3:
+            raise RuntimeError('Không nhận được ảnh từ ' + TOPIC)
+        time.sleep(0.02)
+    return cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)   # mô hình train trên ảnh BGR
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--model', required=True, help='đường dẫn best.pt hoặc best.onnx')
+    ap.add_argument('--conf', type=float, default=0.5)
+    ap.add_argument('--iou', type=float, default=0.45)
+    ap.add_argument('--sliders', type=int, nargs='+', default=SLIDER_POS, help='các vị trí thanh trượt (bước từ home)')
+    ap.add_argument('--yes', action='store_true', help='không hỏi Enter trước mỗi điểm dừng')
+    ap.add_argument('--no-show', action='store_true', help='không mở cửa sổ hiển thị')
+    a = ap.parse_args()
+    for s in a.sliders:
+        if not SLIDER_MIN <= s <= SLIDER_MAX:
+            raise SystemExit('Vị trí thanh trượt %d ngoài khoảng %d..%d' % (s, SLIDER_MIN, SLIDER_MAX))
+
+    def ask(text):
+        if not a.yes and input(text + ' [Enter = chạy, q = dừng] ').strip().lower() == 'q':
+            raise Stop()
+
+    det = load_backend(os.path.expanduser(a.model), a.conf, a.iou)   # nạp mô hình trước khi động tới robot
+    show = not a.no_show and bool(os.environ.get('DISPLAY'))
+
+    out = os.path.join(OUT_ROOT, time.strftime('%Y%m%d_%H%M%S'))
+    os.makedirs(out, exist_ok=True)
+
+    rospy.init_node('scan_detect')
+    pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
+    rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
+    rospy.sleep(1.0)
+
+    start = get_pos()
+    print('Vị trí tay máy ban đầu =', start)
+    print('Thanh trượt sẽ về HOME. Hãy chắc tay máy đang nâng cao (z >= %d) và không vướng vật cản.' % SLIDER_MIN_Z)
+    if start[2] < SLIDER_MIN_Z:
+        raise SystemExit('Tay máy đang thấp hơn z=%d, hãy nâng lên trước' % SLIDER_MIN_Z)
+    ask('Bắt đầu')
+
+    stepper = hiwonder.Stepper(1)
+    pos = 0
+    f = open(os.path.join(out, 'detections.csv'), 'w', newline='')
+    w = csv.writer(f)
+    w.writerow(['image', 'slider', 'arm_x', 'arm_y', 'arm_z', 'class', 'conf', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy'])
+    n = 0
+    try:
+        stepper.go_home(True)                # chặn cho tới khi về home (không có timeout, canh nút nguồn)
+        stepper.set_mode(stepper.EN)
+        stepper.set_div(stepper.DIV_1_4)
+
+        for sp in a.sliders:
+            ask('Thanh trượt -> %d' % sp)
+            move_arm(pub, start)             # luôn về tư thế cao ban đầu trước khi trượt
+            pos = move_slider(stepper, pos, sp)
+            print('  thanh trượt = %d' % pos)
+
+            for off in ARM_OFFSETS:
+                target = (start[0] + off[0], start[1] + off[1], start[2] + off[2])
+                ask('  Tay máy offset %s' % (off,))
+                try:
+                    cur = move_arm(pub, target)
+                except ValueError as e:
+                    print('  ', e)
+                    continue
+                img = grab()
+                t0 = time.time()
+                dets = det(img)
+                ms = (time.time() - t0) * 1000
+                tag = 's%d_%03d' % (pos, n)
+                cv2.imwrite(os.path.join(out, 'raw_%s.jpg' % tag), img)
+                vis = draw(img.copy(), dets, det.names, 0, ms)
+                cv2.imwrite(os.path.join(out, 'det_%s.jpg' % tag), vis)
+                for x1, y1, x2, y2, c, k in dets:
+                    name = det.names[int(k)] if int(k) < len(det.names) else str(int(k))
+                    w.writerow(['det_%s.jpg' % tag, pos, '%.1f' % cur[0], '%.1f' % cur[1], '%.1f' % cur[2],
+                                name, '%.3f' % c, int(x1), int(y1), int(x2), int(y2),
+                                int((x1 + x2) / 2), int((y1 + y2) / 2)])
+                f.flush()
+                print('  %s: %d quân (%.0f ms) %s' % (tag, len(dets), ms,
+                                                       ', '.join(sorted(det.names[int(d[5])] for d in dets))))
+                if show:
+                    cv2.imshow('scan_detect', vis)
+                    cv2.waitKey(1)
+                n += 1
+    except Stop:
+        print('Dừng theo yêu cầu')
+    except (ValueError, RuntimeError) as e:
+        print('LỖI:', e)
+    finally:
+        f.close()
+        try:
+            pub.publish(SetJetMax(x=start[0], y=start[1], z=start[2], duration=2.0))
+            rospy.sleep(2.5)
+            if pos > 0:
+                stepper.goto(-pos)           # quay lại home
+                time.sleep(pos / SLIDER_SPEED + 0.5)
+            stepper.set_mode(stepper.EN)
+        finally:
+            if show:
+                cv2.destroyAllWindows()
+            print('Đã về vị trí ban đầu. Đã xử lý %d ảnh, kết quả ở %s' % (n, out))
+
+
+if __name__ == '__main__':
+    main()
+```
+
+---
 
 ### `tests\move_piece.py`
 
@@ -874,1013 +2222,272 @@ if __name__ == '__main__':
 
 ---
 
-### `tests\scan_detect.py`
+### `tests\joint_teleop.py`
 
-*Dung lượng: 8.53 KB | Số dòng: 203*
+*Dung lượng: 9.60 KB | Số dòng: 256*
 
 ```python
 #!/usr/bin/env python3
-# Quét + nhận diện: thanh trượt -> tay máy -> chụp ảnh -> YOLO11 nhận diện, tại từng điểm dừng.
-# Ghép từ scan_capture.py (điều khiển, giới hạn an toàn) và detect_view.py (mô hình).
-# CHƯA gắp quân cờ; chỉ di chuyển, chụp, nhận diện, vẽ và ghi kết quả.
+# Điều khiển JetMax bằng phím: tịnh tiến x/y/z, xoay TỪNG KHỚP, servo cổ tay, đầu hút và THANH TRƯỢT.
+# Tay máy điều khiển qua ROS topic (cần node jetmax_control đang chạy); thanh trượt qua hiwonder.Stepper.
 #
-# Đặt scan_detect.py CÙNG THƯ MỤC với detect_view.py (file này import từ đó).
-# Yêu cầu: node jetmax_control và usb_cam đang chạy.
+#   python3 joint_teleop.py            # thoát: tay máy và thanh trượt về chỗ ban đầu
+#   python3 joint_teleop.py --stay     # thoát: để nguyên tại chỗ
 #
-# Ví dụ:
-#   python3 scan_detect.py --model ~/models/best.onnx
-#   python3 scan_detect.py --model ~/models/best.onnx --sliders 0 1500 3000 --conf 0.4
-#   python3 scan_detect.py --model ~/models/best.onnx --yes          # không hỏi Enter mỗi điểm
-#
-# Kết quả trong ~/scan_detect/<thời điểm chạy>/ :
-#   raw_*.jpg (ảnh gốc), det_*.jpg (ảnh đã vẽ khung), detections.csv (mỗi dòng 1 quân cờ).
-# Kết thúc/lỗi/q/Ctrl+C: tay máy về chỗ cũ, thanh trượt về 0.
+# Muốn đi XA hơn: giữ Shift (gõ chữ HOA) = bước x4, hoặc bấm t để đổi mức bước.
+# Tốc độ mỗi lần bấm tự tỉ lệ theo quãng đường nên bước nhỏ không còn chờ lâu.
 
-import os, csv, time, argparse
-import cv2
-import numpy as np
+import sys, time, select, termios, tty, argparse
 import rospy
-import hiwonder
-from sensor_msgs.msg import Image
-from jetmax_control.msg import SetJetMax, JetMax
-import sys
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path[:0] = [HERE, os.path.join(HERE, '..', 'robot')]
-from detect_view import load_backend, draw
+from std_msgs.msg import Bool
+from std_srvs.srv import Empty
+from jetmax_control.msg import SetJetMax, SetJoint, SetServo, JetMax
 
-TOPIC = '/usb_cam/image_rect_color'
-OUT_ROOT = os.path.expanduser('~/scan_detect')
+MM_STEPS = [5, 10, 20, 40]               # mm
+DEG_STEPS = [2, 5, 10, 20]               # độ (khớp và cổ tay)
+SLIDER_STEPS = [500, 1000, 2000, 3000]   # bước thanh trượt (bước nhỏ làm động cơ dừng-chạy liên tục nên giật)
+BIG = 4                                  # hệ số khi giữ Shift
+SPEED_MM = 150.0                         # mm/giây
+SPEED_DEG = 120.0                        # độ/giây
+MIN_DUR = 0.2                            # giây, thời gian tối thiểu mỗi lệnh
+X_LIM, Y_LIM, Z_LIM = (-120, 120), (-230, -100), (-12, 225)   # giống các script trước
+R_MIN = 50.0                             # bán kính xy tối thiểu (jetmax.py bỏ qua lệnh nếu nhỏ hơn)
+PWM_MIN, PWM_MAX = 0, 180
+JOINT_TOL = 0.5                          # độ
+SLIDER_MIN, SLIDER_MAX = 0, 5200         # 5200 là điểm xa nhất trong ví dụ hãng, chưa phải hành trình đo được
+SLIDER_SPEED = 800.0                     # bước/giây dùng để ước lượng thời gian chờ (hãng ghi 1000; để thấp hơn cho chắc)
+SLIDER_MIN_Z = 40.0                      # chỉ cho trượt khi tay máy nâng đủ cao (ví dụ hãng nâng lên z=50 trước)
 
-# ---- Kế hoạch quét (chỉnh ở đây hoặc bằng --sliders) ----
-SLIDER_POS = [0, 1000, 2000]                 # bước từ home
-ARM_OFFSETS = [(0, 0, 0), (20, 0, 0), (-20, 0, 0),
-               (0, 20, 0), (0, -20, 0), (0, 0, -20)]   # mm, tính từ vị trí ban đầu
-DUR = 2.0                                    # giây mỗi lần di chuyển tay máy
+ap = argparse.ArgumentParser()
+ap.add_argument('--stay', action='store_true', help='khi thoát, không đưa tay máy/thanh trượt về chỗ cũ')
+args = ap.parse_args()
 
-# ---- Giới hạn an toàn (giống scan_capture.py / pick_place.py) ----
-SLIDER_MIN, SLIDER_MAX = 0, 5200
-SLIDER_SPEED = 800.0                         # bước/giây, dùng ước lượng thời gian chờ (hãng ghi 1000)
-SLIDER_MIN_Z = 40.0                          # chỉ trượt khi tay máy nâng đủ cao
-X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0
-TOL = 5.0                                    # mm
+rospy.init_node('joint_teleop')
+abs_pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
+joint_pubs = [rospy.Publisher('/jetmax/joint%d/command' % i, SetJoint, queue_size=1) for i in (1, 2, 3)]
+pwm_pub = rospy.Publisher('/jetmax/end_effector/servo1/command', SetServo, queue_size=1)
+sucker_pub = rospy.Publisher('/jetmax/end_effector/sucker/command', Bool, queue_size=1)
 
-
-class Stop(Exception):
-    pass
-
-
-state = {'img': None, 'n': 0}
-
-
-def on_image(msg):
-    state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()   # RGB
-    state['n'] += 1
-
-
-def get_pos():
-    m = rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
-    return m.x, m.y, m.z
-
-
-def check_target(x, y, z):
-    ok = (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
-          and (x * x + y * y) ** 0.5 >= R_MIN)
-    if not ok:
-        raise ValueError('Đích (%.1f, %.1f, %.1f) ngoài giới hạn an toàn, bỏ qua' % (x, y, z))
-
-
-def move_arm(pub, target):
-    check_target(*target)
-    pub.publish(SetJetMax(x=target[0], y=target[1], z=target[2], duration=DUR))
-    rospy.sleep(DUR + 0.7)
-    cur = get_pos()
-    if max(abs(cur[i] - target[i]) for i in range(3)) > TOL:
-        print('  CẢNH BÁO: tay máy lệch so với đích (lệnh có thể bị chặn bởi giới hạn)')
-    return cur
-
-
-def move_slider(stepper, pos, new):
-    new = int(max(SLIDER_MIN, min(SLIDER_MAX, new)))
-    d = new - pos
-    if d == 0:
-        return pos
-    if get_pos()[2] < SLIDER_MIN_Z:
-        raise RuntimeError('Tay máy đang thấp hơn z=%d, không trượt' % SLIDER_MIN_Z)
-    stepper.set_mode(stepper.SLEEP)
-    stepper.goto(d)                          # bước TƯƠNG ĐỐI
-    time.sleep(abs(d) / SLIDER_SPEED + 0.5)
-    return new
-
-
-def grab():
-    t0, n0 = time.time(), state['n']
-    while state['n'] < n0 + 2:               # đợi khung hình mới sau khi dừng hẳn
-        if time.time() - t0 > 3:
-            raise RuntimeError('Không nhận được ảnh từ ' + TOPIC)
-        time.sleep(0.02)
-    return cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)   # mô hình train trên ảnh BGR
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--model', required=True, help='đường dẫn best.pt hoặc best.onnx')
-    ap.add_argument('--conf', type=float, default=0.5)
-    ap.add_argument('--iou', type=float, default=0.45)
-    ap.add_argument('--sliders', type=int, nargs='+', default=SLIDER_POS, help='các vị trí thanh trượt (bước từ home)')
-    ap.add_argument('--yes', action='store_true', help='không hỏi Enter trước mỗi điểm dừng')
-    ap.add_argument('--no-show', action='store_true', help='không mở cửa sổ hiển thị')
-    a = ap.parse_args()
-    for s in a.sliders:
-        if not SLIDER_MIN <= s <= SLIDER_MAX:
-            raise SystemExit('Vị trí thanh trượt %d ngoài khoảng %d..%d' % (s, SLIDER_MIN, SLIDER_MAX))
-
-    def ask(text):
-        if not a.yes and input(text + ' [Enter = chạy, q = dừng] ').strip().lower() == 'q':
-            raise Stop()
-
-    det = load_backend(os.path.expanduser(a.model), a.conf, a.iou)   # nạp mô hình trước khi động tới robot
-    show = not a.no_show and bool(os.environ.get('DISPLAY'))
-
-    out = os.path.join(OUT_ROOT, time.strftime('%Y%m%d_%H%M%S'))
-    os.makedirs(out, exist_ok=True)
-
-    rospy.init_node('scan_detect')
-    pub = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
-    rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
-    rospy.sleep(1.0)
-
-    start = get_pos()
-    print('Vị trí tay máy ban đầu =', start)
-    print('Thanh trượt sẽ về HOME. Hãy chắc tay máy đang nâng cao (z >= %d) và không vướng vật cản.' % SLIDER_MIN_Z)
-    if start[2] < SLIDER_MIN_Z:
-        raise SystemExit('Tay máy đang thấp hơn z=%d, hãy nâng lên trước' % SLIDER_MIN_Z)
-    ask('Bắt đầu')
-
+stepper = None
+try:
+    import hiwonder
     stepper = hiwonder.Stepper(1)
-    pos = 0
-    f = open(os.path.join(out, 'detections.csv'), 'w', newline='')
-    w = csv.writer(f)
-    w.writerow(['image', 'slider', 'arm_x', 'arm_y', 'arm_z', 'class', 'conf', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy'])
-    n = 0
-    try:
-        stepper.go_home(True)                # chặn cho tới khi về home (không có timeout, canh nút nguồn)
-        stepper.set_mode(stepper.EN)
-        stepper.set_div(stepper.DIV_1_4)
-
-        for sp in a.sliders:
-            ask('Thanh trượt -> %d' % sp)
-            move_arm(pub, start)             # luôn về tư thế cao ban đầu trước khi trượt
-            pos = move_slider(stepper, pos, sp)
-            print('  thanh trượt = %d' % pos)
-
-            for off in ARM_OFFSETS:
-                target = (start[0] + off[0], start[1] + off[1], start[2] + off[2])
-                ask('  Tay máy offset %s' % (off,))
-                try:
-                    cur = move_arm(pub, target)
-                except ValueError as e:
-                    print('  ', e)
-                    continue
-                img = grab()
-                t0 = time.time()
-                dets = det(img)
-                ms = (time.time() - t0) * 1000
-                tag = 's%d_%03d' % (pos, n)
-                cv2.imwrite(os.path.join(out, 'raw_%s.jpg' % tag), img)
-                vis = draw(img.copy(), dets, det.names, 0, ms)
-                cv2.imwrite(os.path.join(out, 'det_%s.jpg' % tag), vis)
-                for x1, y1, x2, y2, c, k in dets:
-                    name = det.names[int(k)] if int(k) < len(det.names) else str(int(k))
-                    w.writerow(['det_%s.jpg' % tag, pos, '%.1f' % cur[0], '%.1f' % cur[1], '%.1f' % cur[2],
-                                name, '%.3f' % c, int(x1), int(y1), int(x2), int(y2),
-                                int((x1 + x2) / 2), int((y1 + y2) / 2)])
-                f.flush()
-                print('  %s: %d quân (%.0f ms) %s' % (tag, len(dets), ms,
-                                                       ', '.join(sorted(det.names[int(d[5])] for d in dets))))
-                if show:
-                    cv2.imshow('scan_detect', vis)
-                    cv2.waitKey(1)
-                n += 1
-    except Stop:
-        print('Dừng theo yêu cầu')
-    except (ValueError, RuntimeError) as e:
-        print('LỖI:', e)
-    finally:
-        f.close()
-        try:
-            pub.publish(SetJetMax(x=start[0], y=start[1], z=start[2], duration=2.0))
-            rospy.sleep(2.5)
-            if pos > 0:
-                stepper.goto(-pos)           # quay lại home
-                time.sleep(pos / SLIDER_SPEED + 0.5)
-            stepper.set_mode(stepper.EN)
-        finally:
-            if show:
-                cv2.destroyAllWindows()
-            print('Đã về vị trí ban đầu. Đã xử lý %d ảnh, kết quả ở %s' % (n, out))
+except Exception as e:
+    print('Không khởi tạo được thanh trượt (%s): các phím z/x/c bị tắt.' % e)
+slider_enabled = False                   # đã gửi chế độ SLEEP (giữ động cơ) chưa
+slider_pos = 0                           # không đọc lại được từ phần cứng nên tự theo dõi, coi lúc mở là 0
+rospy.sleep(1.0)
 
 
-if __name__ == '__main__':
-    main()
-```
-
----
-
-## Nhóm 4: Huấn luyện, Cấu trúc Class & Dataset
-
-### `training\README.md`
-
-*Dung lượng: 0 B | Số dòng: 0*
-
-```markdown
-
-```
-
----
-
-### `training\build_dataset.ipynb`
-
-*File Jupyter Notebook | Dung lượng: 3.49 MB*
-
-<!-- Cell 1 (Markdown) -->
-<a href="https://colab.research.google.com/github/JulianNguyen05/xiangqi-sorting-jetmax/blob/main/training/build_dataset.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
-
-<!-- Cell 2 (Markdown) -->
-# Mount Drive và tạo thư mục
-
-```python
-# Cell 3 (Code)
-from google.colab import drive
-drive.mount('/content/drive')
-
-import os
-BASE = '/content/drive/MyDrive/datn'
-RAW_DRIVE = f'{BASE}/raw'          # bản nén .zip của từng bộ (lưu lâu dài)
-RAW_LOCAL = '/content/raw'         # bản giải nén trên máy Colab (đọc nhanh)
-for d in ['raw', 'merged', 'runs', 'own_images']:
-    os.makedirs(f'{BASE}/{d}', exist_ok=True)
-os.makedirs(RAW_LOCAL, exist_ok=True)
-print('OK:', BASE)
-```
-
-<!-- Cell 4 (Markdown) -->
-# Cài thư viện
-
-```python
-# Cell 5 (Code)
-!pip install -q roboflow imagehash pyyaml
-```
-
-<!-- Cell 6 (Markdown) -->
-# Lấy API key
+def status():
+    return rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
 
 
-```python
-# Cell 7 (Code)
-from google.colab import userdata
-from roboflow import Roboflow
+def joints_of(m):
+    return [m.joint1, m.joint2, m.joint3]
 
-API_KEY = userdata.get('ROBOFLOW_API_KEY')
-rf = Roboflow(api_key=API_KEY)
-print('Đã kết nối Roboflow')
-```
 
-<!-- Cell 8 (Markdown) -->
-## Khai báo 4 bộ dataset
-Danh sách 4 dataset trên Roboflow Universe.
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
 
-| Tên ngắn | Link |
-|---|---|
-| super | https://universe.roboflow.com/312s-workspace/xiangqi-super-dataset |
-| scara | https://universe.roboflow.com/312s-workspace/xiangqi-scara-yolo26 |
-| new_chinese_chess | https://universe.roboflow.com/quoc-rnmzr/new-chinese-chess-ayph4/dataset/1 |
-| duytranle | https://universe.roboflow.com/duytranle/xiangqi-ubjij/dataset/18 |
 
-```python
-# Cell 9 (Code)
-DATASETS = {
-    'super':             {'workspace': '312s-workspace', 'project': 'xiangqi-super-dataset',   'version': None},
-    'scara':             {'workspace': '312s-workspace', 'project': 'xiangqi-scara-yolo26',    'version': None},
-    'new_chinese_chess': {'workspace': 'quoc-rnmzr',     'project': 'new-chinese-chess-ayph4', 'version': 1},
-    'duytranle':         {'workspace': 'duytranle',      'project': 'xiangqi-ubjij',           'version': 18,
-                          'format': 'yolov8'},   # dự án keypoint không hỗ trợ yolov11
-}
-```
+def in_limits(x, y, z):
+    return (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
+            and (x * x + y * y) ** 0.5 >= R_MIN)
 
-<!-- Cell 10 (Markdown) -->
-### Tải về, giải nén và sao lưu lên Drive
-Với mỗi bộ: (1) đã có trên Colab thì bỏ qua; (2) đã có file .zip trên Drive thì giải nén; (3) chưa có thì tải từ Roboflow (định dạng yolov11) rồi nén lưu lên Drive. Phiên bản đã tải được ghi vào versions_used.json để đưa vào báo cáo.
 
-```python
-# Cell 11 (Code)
-import shutil, json
+def show():
+    m = status()
+    print('  xyz = (%.1f, %.1f, %.1f) | joint = (%.1f, %.1f, %.1f) | cổ tay = %.0f | hút = %s | trượt = %d' % (
+        m.x, m.y, m.z, m.joint1, m.joint2, m.joint3, m.pwm1, m.sucker, slider_pos))
 
-def latest_version(project):
-    vs = project.versions()
-    return max(int(str(v.version).split('/')[-1]) for v in vs)
 
-VERSIONS_FILE = f'{BASE}/raw/versions_used.json'
-versions_used = json.load(open(VERSIONS_FILE)) if os.path.exists(VERSIONS_FILE) else {}
-paths = {}
+def move_xyz(dx, dy, dz):
+    m = status()
+    cur = (m.x, m.y, m.z)
+    t = (clamp(m.x + dx, *X_LIM), clamp(m.y + dy, *Y_LIM), clamp(m.z + dz, *Z_LIM))
+    if (t[0] ** 2 + t[1] ** 2) ** 0.5 < R_MIN:
+        print('  Quá gần trục (bán kính < %d mm), không đi' % R_MIN)
+        return
+    dist = sum((t[i] - cur[i]) ** 2 for i in range(3)) ** 0.5
+    if dist < 0.1:
+        print('  Đã ở biên giới hạn an toàn')
+        return
+    if abs(dx) + abs(dy) + abs(dz) - dist > 0.5:
+        print('  (cắt bớt cho vừa giới hạn an toàn)')
+    dur = max(MIN_DUR, dist / SPEED_MM)
+    abs_pub.publish(SetJetMax(x=t[0], y=t[1], z=t[2], duration=dur))
+    rospy.sleep(dur + 0.1)
+    show()
 
-for name, cfg in DATASETS.items():
-    out_dir  = f'{RAW_LOCAL}/{name}'
-    zip_base = f'{RAW_DRIVE}/{name}'
 
-    if os.path.isdir(out_dir) and os.listdir(out_dir):
-        print(f'[{name}] đã có trên Colab, bỏ qua')
-    elif os.path.exists(zip_base + '.zip'):
-        print(f'[{name}] giải nén từ Drive...')
-        shutil.unpack_archive(zip_base + '.zip', out_dir)
-    else:
-        print(f'[{name}] tải từ Roboflow...')
-        project = rf.workspace(cfg['workspace']).project(cfg['project'])
-        ver = cfg['version'] or latest_version(project)
-        fmt = cfg.get('format', 'yolov11')
-        project.version(ver).download(fmt, location=out_dir)
-        shutil.make_archive(zip_base, 'zip', out_dir)
-        versions_used[name] = {**cfg, 'version': ver, 'format': fmt}
-        with open(VERSIONS_FILE, 'w') as f:
-            json.dump(versions_used, f, indent=2, ensure_ascii=False)
-        print(f'[{name}] đã tải version {ver} (định dạng {fmt}) và lưu lên Drive')
+def move_joint(i, delta):
+    m = status()
+    cur = joints_of(m)[i]
+    new = cur + delta
+    dur = max(MIN_DUR, abs(delta) / SPEED_DEG)
+    joint_pubs[i].publish(SetJoint(data=new, duration=dur))
+    rospy.sleep(dur + 0.1)
+    m2 = status()
+    if abs(joints_of(m2)[i] - new) > JOINT_TOL:
+        print('  Lệnh bị từ chối (ngoài giới hạn servo/động học), khớp %d giữ nguyên' % (i + 1))
+    elif not in_limits(m2.x, m2.y, m2.z):
+        print('  Ra ngoài vùng an toàn, hoàn lại khớp %d' % (i + 1))
+        joint_pubs[i].publish(SetJoint(data=cur, duration=dur))
+        rospy.sleep(dur + 0.1)
+    show()
 
-    paths[name] = out_dir
 
-print('Xong:', list(paths))
-```
+def move_wrist(delta):
+    cur = status().pwm1
+    new = int(clamp(cur + delta, PWM_MIN, PWM_MAX))
+    pwm_pub.publish(SetServo(data=new, duration=0.2))
+    rospy.sleep(0.3)
+    show()
 
-<!-- Cell 12 (Markdown) -->
-### Kiểm tra tên lớp và số ảnh của từng bộ
-In danh sách lớp (names trong data.yaml) và số ảnh mỗi tập. Với mỗi bộ: in tên lớp, số ảnh (và số ảnh gốc ước lượng) mỗi tập, bảng số box theo lớp ở từng tập, và các lỗi nhãn.
 
-```python
-# Cell 13 (Code)
-import yaml, glob, os
-import pandas as pd
-from collections import Counter
+def toggle_sucker():
+    sucker_pub.publish(Bool(data=not status().sucker))
+    rospy.sleep(0.3)
+    show()
 
-SPLITS = ['train', 'valid', 'test']
-IMG_EXT = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
-MIN_BOX_WARN = 300          # lớp có ít box hơn mức này sẽ bị cảnh báo
-pd.set_option('display.width', 220)
 
-def load_names(yaml_path):
-    with open(yaml_path, encoding='utf-8') as f:
-        names = yaml.safe_load(f)['names']
-    if isinstance(names, dict):
-        names = [names[k] for k in sorted(names)]
-    return names
+def arm_high_enough():
+    if status().z < SLIDER_MIN_Z:
+        print('  Nâng tay máy lên z >= %d trước khi trượt (bấm r)' % SLIDER_MIN_Z)
+        return False
+    return True
 
-def source_id(filename):
-    # Roboflow: <tên gốc>.rf.<hash>.jpg -> bản augment cùng một ảnh gốc
-    return filename.split('.rf.')[0]
 
-reports = {}
-for name, p in paths.items():
-    print('=' * 80)
-    print(name.upper())
-    yaml_files = glob.glob(f'{p}/**/data.yaml', recursive=True)
-    if not yaml_files:
-        print('  Không thấy data.yaml')
-        continue
-    root = os.path.dirname(yaml_files[0])
-    names = load_names(yaml_files[0])
-    print(f'  Số lớp: {len(names)}')
-    print(f'  Tên lớp: {names}')
+def move_slider(d):
+    global slider_pos, slider_enabled
+    if stepper is None:
+        print('  Thanh trượt không khả dụng')
+        return
+    if not arm_high_enough():
+        return
+    new = clamp(slider_pos + d, SLIDER_MIN, SLIDER_MAX)
+    d = new - slider_pos
+    if d == 0:
+        print('  Thanh trượt ở biên (%d)' % slider_pos)
+        return
+    if not slider_enabled:
+        stepper.set_mode(stepper.SLEEP)       # chỉ gửi một lần, không gửi trước mỗi lần bấm
+        slider_enabled = True
+    stepper.goto(d)
+    time.sleep(abs(d) / SLIDER_SPEED + 0.2)
+    slider_pos = new
+    show()
 
-    box = {s: Counter() for s in SPLITS}      # số box theo lớp
-    img_with = Counter()                      # số ảnh có chứa lớp (cả 3 tập)
-    problems = Counter()
 
-    for s in SPLITS:
-        img_files = [f for f in glob.glob(f'{root}/{s}/images/*')
-                     if f.lower().endswith(IMG_EXT)]
-        n_src = len({source_id(os.path.basename(f)) for f in img_files})
-        print(f'  {s:6s}: {len(img_files):5d} ảnh  (~{n_src} ảnh gốc ước lượng)')
+def slider_home():
+    global slider_pos, slider_enabled
+    if stepper is None or not arm_high_enough():
+        return
+    print('  Thanh trượt về home (chờ đến khi xong)...')
+    stepper.go_home(True)
+    stepper.set_mode(stepper.EN)
+    stepper.set_div(stepper.DIV_1_4)
+    slider_pos = 0
+    slider_enabled = False
+    show()
 
-        lbl_files = glob.glob(f'{root}/{s}/labels/*.txt')
-        img_stems = {os.path.splitext(os.path.basename(f))[0] for f in img_files}
-        lbl_stems = {os.path.splitext(os.path.basename(f))[0] for f in lbl_files}
-        problems['ảnh không có file nhãn'] += len(img_stems - lbl_stems)
-        problems['file nhãn không có ảnh'] += len(lbl_stems - img_stems)
 
-        for lf in lbl_files:
-            with open(lf) as f:
-                lines = [l.split() for l in f if l.strip()]
-            if not lines:
-                problems['file nhãn rỗng'] += 1
-            seen = set()
-            for parts in lines:
-                if len(parts) != 5:
-                    problems['dòng nhãn không phải bbox (5 giá trị)'] += 1
-                    continue
-                try:
-                    cid = int(parts[0])
-                    x, y, w, h = map(float, parts[1:])
-                except ValueError:
-                    problems['dòng nhãn sai định dạng'] += 1
-                    continue
-                if not (0 <= cid < len(names)):
-                    problems['id lớp ngoài phạm vi'] += 1
-                    continue
-                if w <= 0 or h <= 0:
-                    problems['box có w hoặc h <= 0'] += 1
-                if x - w/2 < -0.01 or y - h/2 < -0.01 or x + w/2 > 1.01 or y + h/2 > 1.01:
-                    problems['box lệch ra ngoài khung ảnh'] += 1
-                box[s][names[cid]] += 1
-                seen.add(names[cid])
-            for c in seen:
-                img_with[c] += 1
+HELP = """
+Tịnh tiến (mm):  d/a = x +/-    w/s = y +/-    r/f = z +/-
+Khớp (độ):       u/j = joint1   i/k = joint2   o/l = joint3   (n/m = cổ tay)
+Thanh trượt:     x/z = tiến/lùi    c = về home thật (đặt lại vị trí 0)
+Đi xa hơn:       gõ chữ HOA (giữ Shift) = bước x4, hoặc t để đổi mức bước
+v = bật/tắt đầu hút    h = tay máy về home    p = in trạng thái    q = thoát
+"""
 
-    df = pd.DataFrame({f'{s}_box': pd.Series(box[s]) for s in SPLITS}).reindex(names).fillna(0).astype(int)
-    df['tong_box'] = df.sum(axis=1)
-    df['tong_anh_co_lop'] = pd.Series(img_with).reindex(names).fillna(0).astype(int)
-    reports[name] = df
+start = status()
+print('Vị trí ban đầu:', (start.x, start.y, start.z), 'pwm1 =', start.pwm1)
+print(HELP)
+print('Thanh trượt coi như đang ở 0 lúc mở; nếu không chắc, bấm c để về home thật.')
+level = 0
+print('Bước = %d mm / %d độ / %d bước trượt' % (MM_STEPS[level], DEG_STEPS[level], SLIDER_STEPS[level]))
+show()
 
-    print('\n  Số box theo lớp:')
-    print(df.to_string())
-    print(f"\n  Tổng box: {df['tong_box'].sum()}")
-    weak = df[df['tong_box'] < MIN_BOX_WARN].index.tolist()
-    if weak:
-        print(f'  ⚠ Lớp ít hơn {MIN_BOX_WARN} box: {weak}')
-    if problems:
-        print('  ⚠ Vấn đề phát hiện:')
-        for k, v in problems.items():
-            print(f'     - {k}: {v}')
-    else:
-        print('  Không phát hiện lỗi nhãn cơ bản.')
-```
-
-<!-- Cell 14 (Markdown) -->
-### Chẩn đoán dòng nhãn không phải bbox
-Với mỗi bộ: đếm dòng 5 giá trị (bbox chuẩn) và các dòng khác, gom theo (lớp, số giá trị mỗi dòng), in kèm một dòng mẫu. Dùng để biết dòng lạ là polygon (segmentation) hay pose (keypoint) và thuộc lớp nào.
-
-```python
-# Cell 15 (Code)
-from collections import Counter
-
-for name, p in paths.items():
-    yf = glob.glob(f'{p}/**/data.yaml', recursive=True)[0]
-    root = os.path.dirname(yf)
-    names = load_names(yf)
-    odd, sample, ok = Counter(), {}, 0
-    for lf in glob.glob(f'{root}/*/labels/*.txt'):
-        for line in open(lf):
-            parts = line.split()
-            if not parts:
-                continue
-            if len(parts) == 5:
-                ok += 1
-                continue
-            key = (names[int(parts[0])], len(parts))
-            odd[key] += 1
-            sample.setdefault(key, ' '.join(parts[:12]))
-    print('=' * 70)
-    print(f'{name} | dòng 5 giá trị: {ok} | dòng khác: {sum(odd.values())}')
-    for (cls, n), c in odd.most_common(6):
-        print(f'  lớp={cls:15s} số giá trị/dòng={n:3d}  số dòng={c}')
-        print('     mẫu:', sample[(cls, n)])
-```
-
-<!-- Cell 16 (Markdown) -->
-## Làm sạch và ánh xạ về 14 lớp chuẩn
-Duyệt từng bộ: đổi tên lớp về 14 lớp chuẩn, bỏ dòng `board`, bỏ ảnh có lớp `None`, chuyển polygon (super) và pose (duytranle) về bbox, kẹp box vào khung ảnh. Ảnh và nhãn sạch được gom vào /content/pool kèm manifest.csv (bộ, tập gốc, mã ảnh gốc). In bảng số box theo lớp và thống kê các thao tác đã làm.
-
-```python
-# Cell 17 (Code)
-import shutil, glob, os, yaml
-import pandas as pd
-from collections import Counter
-
-SPLITS = ['train', 'valid', 'test']
-IMG_EXT = ('.jpg', '.jpeg', '.png', '.bmp', '.webp')
-POOL = '/content/pool'
-
-CLASSES = [f'{c}_{p}' for c in ['black', 'red']
-           for p in ['advisor', 'bishop', 'cannon', 'king', 'knight', 'pawn', 'rook']]
-CLASS_ID = {c: i for i, c in enumerate(CLASSES)}
-PIECE_ALIAS = {'elephant': 'bishop', 'chariot': 'rook', 'general': 'king',
-               'horse': 'knight', 'guard': 'advisor', 'soldier': 'pawn'}
-DROP_LINES = {'board'}      # bỏ dòng nhãn, giữ ảnh
-DROP_IMAGES = {'none'}      # bỏ cả ảnh có lớp này
-POSE_DATASETS = {'duytranle'}   # nhãn dạng: lớp x y w h + keypoint
-
-def load_names(yaml_path):
-    with open(yaml_path, encoding='utf-8') as f:
-        names = yaml.safe_load(f)['names']
-    if isinstance(names, dict):
-        names = [names[k] for k in sorted(names)]
-    return names
-
-def source_id(filename):
-    return filename.split('.rf.')[0]
-
-def canon(raw):
-    n = raw.strip().lower().replace('-', '_').replace(' ', '_')
-    if n in DROP_LINES:
-        return 'DROP_LINE'
-    if n in DROP_IMAGES:
-        return 'DROP_IMAGE'
-    color, piece = n.split('_', 1)
-    name = f'{color}_{PIECE_ALIAS.get(piece, piece)}'
-    if name not in CLASS_ID:
-        raise ValueError(f'Lớp lạ chưa ánh xạ: {raw}')
-    return name
-
-if os.path.exists(POOL):
-    shutil.rmtree(POOL)
-os.makedirs(f'{POOL}/images'); os.makedirs(f'{POOL}/labels')
-
-rows, cls_count, stats = [], {}, {}
-for name, p in paths.items():
-    yf = glob.glob(f'{p}/**/data.yaml', recursive=True)[0]
-    root = os.path.dirname(yf)
-    names = load_names(yf)
-    pose = name in POSE_DATASETS
-    st, cnt = Counter(), Counter()
-
-    for split in SPLITS:
-        img_dir, lbl_dir = f'{root}/{split}/images', f'{root}/{split}/labels'
-        if not os.path.isdir(lbl_dir):
+fd = sys.stdin.fileno()
+old = termios.tcgetattr(fd)
+try:
+    tty.setcbreak(fd)
+    while not rospy.is_shutdown():
+        if not select.select([sys.stdin], [], [], 0.1)[0]:
             continue
-        imgs = {os.path.splitext(f)[0]: f for f in os.listdir(img_dir) if f.lower().endswith(IMG_EXT)}
-        for lf in os.listdir(lbl_dir):
-            stem = os.path.splitext(lf)[0]
-            if stem not in imgs:
-                continue
-            out, kept, skip = [], [], False
-            for line in open(f'{lbl_dir}/{lf}'):
-                parts = line.split()
-                if not parts:
-                    continue
-                c = canon(names[int(parts[0])])
-                if c == 'DROP_LINE':
-                    st['dòng board bỏ'] += 1
-                    continue
-                if c == 'DROP_IMAGE':
-                    skip = True
-                    break
-                vals = list(map(float, parts[1:]))
-                if len(vals) == 4:
-                    x, y, w, h = vals
-                elif pose and len(vals) >= 4:
-                    x, y, w, h = vals[:4]; st['pose→bbox'] += 1
-                elif len(vals) >= 6 and len(vals) % 2 == 0:
-                    xs, ys = vals[0::2], vals[1::2]
-                    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-                    x, y, w, h = (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0
-                    st['polygon→bbox'] += 1
-                else:
-                    st['dòng lỗi bỏ'] += 1
-                    continue
-                x0, y0 = max(0.0, x - w / 2), max(0.0, y - h / 2)
-                x1, y1 = min(1.0, x + w / 2), min(1.0, y + h / 2)
-                w, h = x1 - x0, y1 - y0
-                if w <= 0.005 or h <= 0.005:
-                    st['box quá nhỏ/lỗi bỏ'] += 1
-                    continue
-                out.append(f'{CLASS_ID[c]} {(x0 + x1) / 2:.6f} {(y0 + y1) / 2:.6f} {w:.6f} {h:.6f}')
-                kept.append(c)
-            if skip:
-                st['ảnh bỏ (lớp None)'] += 1
-                continue
-            if not out:
-                st['ảnh bỏ (không còn box)'] += 1
-                continue
-            new = f'{name}__{imgs[stem]}'
-            shutil.copy(f'{img_dir}/{imgs[stem]}', f'{POOL}/images/{new}')
-            with open(f'{POOL}/labels/{os.path.splitext(new)[0]}.txt', 'w') as f:
-                f.write('\n'.join(out) + '\n')
-            cnt.update(kept)
-            rows.append({'file': new, 'dataset': name, 'orig_split': split,
-                         'source_id': f'{name}__{source_id(imgs[stem])}', 'n_box': len(out)})
-    cls_count[name], stats[name] = cnt, st
-
-manifest = pd.DataFrame(rows)
-manifest.to_csv(f'{POOL}/manifest.csv', index=False)
-
-print('Số ảnh sạch theo bộ và tập gốc:')
-print(manifest.groupby(['dataset', 'orig_split']).size().unstack(fill_value=0))
-table = pd.DataFrame({n: [c.get(k, 0) for k in CLASSES] for n, c in cls_count.items()}, index=CLASSES)
-table['tong'] = table.sum(axis=1)
-print('\nSố box theo lớp chuẩn:')
-print(table)
-print('\nThao tác đã thực hiện:')
-for n, s in stats.items():
-    print(f'  {n}: {dict(s)}')
-```
-
-<!-- Cell 18 (Markdown) -->
-## Gom nhóm ảnh trùng (cùng ảnh gốc hoặc gần giống nhau)
-Tính perceptual hash cho từng ảnh trong /content/pool rồi gom nhóm bằng union-find: ảnh cùng source_id là một nhóm; ảnh cùng bộ chỉ nối khi hash trùng khít (SAME_DS_T); ảnh khác bộ nối khi khoảng cách hash <= CROSS_DS_T. In kích thước nhóm, thành phần của nhóm lớn nhất, số nhóm nối nhiều bộ, và vẽ vài cặp ảnh trùng khác bộ để kiểm tra bằng mắt. Chưa xóa gì.
-
-```python
-# Cell 19 (Code)
-import numpy as np, imagehash, matplotlib.pyplot as plt
-from PIL import Image
-from collections import defaultdict
-
-SAME_DS_T = 0    # ngưỡng phash nối ảnh CÙNG bộ (0 = hash trùng khít; đặt -1 để chỉ gom theo source_id)
-CROSS_DS_T = 4   # ngưỡng phash nối ảnh KHÁC bộ
-manifest = pd.read_csv(f'{POOL}/manifest.csv')
-n = len(manifest)
-
-# 1) perceptual hash
-hashes = []
-for f in manifest['file']:
-    try:
-        with Image.open(f'{POOL}/images/{f}') as im:
-            hashes.append(int(str(imagehash.phash(im)), 16))
-    except Exception as e:
-        print('Lỗi ảnh:', f, e); hashes.append(0)
-H = np.array(hashes, dtype=np.uint64)
-ds = manifest['dataset'].values
-
-# 2) union-find
-parent = list(range(n))
-def find(a):
-    while parent[a] != a:
-        parent[a] = parent[parent[a]]
-        a = parent[a]
-    return a
-def union(a, b):
-    ra, rb = find(a), find(b)
-    if ra != rb:
-        parent[rb] = ra
-
-first = {}
-for i, s in enumerate(manifest['source_id']):
-    if s in first: union(first[s], i)
-    else: first[s] = i
-
-def popcount64(x):
-    return np.unpackbits(x.view(np.uint8).reshape(-1, 8), axis=1).sum(axis=1)
-
-for i in range(n - 1):
-    d = popcount64(H[i + 1:] ^ H[i])
-    thr = np.where(ds[i + 1:] == ds[i], SAME_DS_T, CROSS_DS_T)
-    for j in (np.nonzero(d <= thr)[0] + i + 1):
-        union(i, int(j))
-
-manifest['group'] = [find(i) for i in range(n)]
-
-# 3) thống kê
-g = manifest.groupby('group')
-sizes = g.size().sort_values(ascending=False)
-multi_ds = g['dataset'].nunique()
-multi_sp = g['orig_split'].nunique()
-print(f'Ảnh: {n} | nhóm: {len(sizes)} | nhóm lớn nhất: {sizes.head(5).tolist()}')
-top = sizes.index[0]
-print('Thành phần nhóm lớn nhất:', manifest[manifest.group == top].groupby(['dataset', 'orig_split']).size().to_dict())
-print(f'Nhóm trải qua >1 bộ: {(multi_ds > 1).sum()} | nhóm nằm ở >1 tập gốc: {(multi_sp > 1).sum()}')
-if sizes.iloc[0] > 0.03 * n:
-    print('⚠ Nhóm lớn nhất quá lớn: đặt SAME_DS_T = -1 và chạy lại.')
-
-print('\nCặp bộ có ảnh trùng nhau:')
-pair = defaultdict(int)
-for gid in multi_ds[multi_ds > 1].index:
-    sets = tuple(sorted(manifest.loc[manifest.group == gid, 'dataset'].unique()))
-    pair[sets] += 1
-for k, v in sorted(pair.items(), key=lambda kv: -kv[1]):
-    print(' ', k, v)
-
-# 4) vẽ vài cặp trùng khác bộ để kiểm tra bằng mắt
-cross = multi_ds[multi_ds > 1].index[:3]
-if len(cross):
-    fig, axes = plt.subplots(len(cross), 2, figsize=(8, 3.5 * len(cross)), squeeze=False)
-    for r, gid in enumerate(cross):
-        sub = manifest[manifest.group == gid].drop_duplicates('dataset').head(2)
-        for c, (_, row) in enumerate(sub.iterrows()):
-            axes[r][c].imshow(Image.open(f'{POOL}/images/{row.file}'))
-            axes[r][c].set_title(row.dataset); axes[r][c].axis('off')
-    plt.tight_layout(); plt.show()
-```
-
-<!-- Cell 20 (Markdown) -->
-## Chia train/val/test theo nhóm và xuất dataset hợp nhất
-Chia ~80/10/10 theo ảnh, giữ nguyên mỗi nhóm trong cùng một tập và giữ tỷ lệ các bộ trong từng tập (StratifiedGroupKFold). Kiểm tra tỷ lệ val/test của từng bộ trước; nếu lệch thì dừng, không ghi file. Nếu ổn thì copy ảnh/nhãn vào /content/merged, ghi data.yaml với 14 lớp chuẩn, in số box theo lớp ở mỗi tập, rồi nén lưu bản sao lên Drive (ghi đè merged_v1.zip cũ).
-
-```python
-# Cell 21 (Code)
-from sklearn.model_selection import StratifiedGroupKFold
-import yaml
-
-MERGED = '/content/merged'
-sgkf = StratifiedGroupKFold(n_splits=10, shuffle=True, random_state=42)
-fold = np.zeros(len(manifest), dtype=int)
-for k, (_, te) in enumerate(sgkf.split(manifest, manifest['dataset'], manifest['group'])):
-    fold[te] = k
-manifest['split'] = np.where(fold == 0, 'test', np.where(fold == 1, 'val', 'train'))
-
-# kiểm tra tỷ lệ trước khi ghi file
-share = manifest.groupby(['dataset', 'split']).size().unstack(fill_value=0)
-for c in ['train', 'val', 'test']:
-    if c not in share: share[c] = 0
-pct = share[['val', 'test']].div(share[['train', 'val', 'test']].sum(axis=1), axis=0) * 100
-print('Số ảnh theo bộ và tập:'); print(share[['train', 'val', 'test']])
-print('\nTỷ lệ val/test mỗi bộ (%):'); print(pct.round(1))
-bad = pct[(share[['train', 'val', 'test']].sum(axis=1) >= 100) & ((pct < 5).any(axis=1) | (pct > 20).any(axis=1))]
-if len(bad):
-    raise ValueError(f'Chia tập lệch ở bộ: {list(bad.index)}. Xem lại bước gom nhóm (nhóm quá lớn?), chưa ghi file.')
-
-if os.path.exists(MERGED):
-    shutil.rmtree(MERGED)
-for s in ['train', 'val', 'test']:
-    os.makedirs(f'{MERGED}/{s}/images'); os.makedirs(f'{MERGED}/{s}/labels')
-
-for _, r in manifest.iterrows():
-    stem = os.path.splitext(r.file)[0]
-    shutil.copy(f'{POOL}/images/{r.file}', f'{MERGED}/{r.split}/images/{r.file}')
-    shutil.copy(f'{POOL}/labels/{stem}.txt', f'{MERGED}/{r.split}/labels/{stem}.txt')
-
-with open(f'{MERGED}/data.yaml', 'w') as f:
-    yaml.safe_dump({'path': MERGED, 'train': 'train/images', 'val': 'val/images',
-                    'test': 'test/images', 'nc': len(CLASSES), 'names': CLASSES},
-                   f, allow_unicode=True, sort_keys=False)
-manifest.to_csv(f'{MERGED}/manifest.csv', index=False)
-
-box = {s: Counter() for s in ['train', 'val', 'test']}
-for s in box:
-    for lf in glob.glob(f'{MERGED}/{s}/labels/*.txt'):
-        for line in open(lf):
-            if line.strip():
-                box[s][CLASSES[int(line.split()[0])]] += 1
-print('\nSố box theo lớp và tập:')
-print(pd.DataFrame(box, index=CLASSES))
-
-shutil.make_archive(f'{BASE}/merged/merged_v1', 'zip', MERGED)
-print('\nĐã lưu', f'{BASE}/merged/merged_v1.zip')
-```
-
-<!-- Cell 22 (Markdown) -->
-## Kiểm tra nhãn bằng mắt
-Vẽ box và tên lớp lên 2 ảnh ngẫu nhiên của mỗi bộ trong tập train của /content/merged, để chắc việc chuyển đổi nhãn (polygon/pose → bbox) và ánh xạ lớp đúng trước khi train.
-
-```python
-# Cell 23 (Code)
-import cv2, matplotlib.pyplot as plt
-
-picks = []
-for dsn in ['super', 'duytranle', 'new_chinese_chess', 'scara']:
-    sub = manifest[(manifest.dataset == dsn) & (manifest.split == 'train')]
-    picks += sub.sample(2, random_state=7)[['file', 'dataset']].values.tolist()
-
-fig, axes = plt.subplots(2, 4, figsize=(24, 12))
-
-for ax, (f, dsn) in zip(axes.flatten(), picks):
-    img = cv2.cvtColor(cv2.imread(f'{MERGED}/train/images/{f}'), cv2.COLOR_BGR2RGB)
-    H, W = img.shape[:2]
-    thick, fs = max(2, W // 300), max(0.5, W / 1100)
-    stem = os.path.splitext(f)[0]
-    for line in open(f'{MERGED}/train/labels/{stem}.txt'):
-        c, x, y, w, h = line.split()
-        c, x, y, w, h = int(c), float(x), float(y), float(w), float(h)
-        p1 = (int((x - w / 2) * W), int((y - h / 2) * H))
-        p2 = (int((x + w / 2) * W), int((y + h / 2) * H))
-        color = (255, 60, 60) if CLASSES[c].startswith('red') else (60, 120, 255)
-        cv2.rectangle(img, p1, p2, color, thick)
-        cv2.putText(img, CLASSES[c].split('_')[1][:3], (p1[0], max(p1[1] - 4, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, fs, (255, 255, 0), max(1, thick - 1))
-    ax.imshow(img); ax.set_title(dsn); ax.axis('off')
-plt.tight_layout(); plt.show()
+        raw = sys.stdin.read(1)
+        f = BIG if raw.isupper() else 1
+        k = raw.lower()
+        mm, deg, sl = MM_STEPS[level] * f, DEG_STEPS[level] * f, SLIDER_STEPS[level] * f
+        if k == 'd':
+            move_xyz(mm, 0, 0)
+        elif k == 'a':
+            move_xyz(-mm, 0, 0)
+        elif k == 'w':
+            move_xyz(0, mm, 0)
+        elif k == 's':
+            move_xyz(0, -mm, 0)
+        elif k == 'r':
+            move_xyz(0, 0, mm)
+        elif k == 'f':
+            move_xyz(0, 0, -mm)
+        elif k == 'u':
+            move_joint(0, deg)
+        elif k == 'j':
+            move_joint(0, -deg)
+        elif k == 'i':
+            move_joint(1, deg)
+        elif k == 'k':
+            move_joint(1, -deg)
+        elif k == 'o':
+            move_joint(2, deg)
+        elif k == 'l':
+            move_joint(2, -deg)
+        elif k == 'n':
+            move_wrist(deg)
+        elif k == 'm':
+            move_wrist(-deg)
+        elif k == 'x':
+            move_slider(sl)
+        elif k == 'z':
+            move_slider(-sl)
+        elif k == 'c':
+            slider_home()
+        elif k == 'v':
+            toggle_sucker()
+        elif k == 't':
+            level = (level + 1) % len(MM_STEPS)
+            print('Bước = %d mm / %d độ / %d bước trượt' % (MM_STEPS[level], DEG_STEPS[level], SLIDER_STEPS[level]))
+        elif k == 'h':
+            rospy.ServiceProxy('/jetmax/go_home', Empty)()
+            rospy.sleep(2.5)
+            show()
+        elif k == 'p':
+            show()
+        elif k == 'q':
+            break
+        termios.tcflush(fd, termios.TCIFLUSH)   # bỏ phím bấm dồn trong lúc robot đang chạy
+finally:
+    termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    sucker_pub.publish(Bool(data=False))
+    if not args.stay:
+        abs_pub.publish(SetJetMax(x=start.x, y=start.y, z=start.z, duration=2.0))
+        pwm_pub.publish(SetServo(data=int(start.pwm1), duration=1.0))
+        rospy.sleep(2.5)
+        if stepper is not None and slider_pos != 0:
+            if not slider_enabled:
+                stepper.set_mode(stepper.SLEEP)
+            stepper.goto(-slider_pos)
+            time.sleep(slider_pos / SLIDER_SPEED + 0.3)
+    if stepper is not None:
+        stepper.set_mode(stepper.EN)
+    print('Đã thoát' + ('' if args.stay else ' (về vị trí ban đầu)'))
 ```
 
 ---
 
-### `training\train_yolo11.ipynb`
-
-*File Jupyter Notebook | Dung lượng: 13.46 KB*
-
-<!-- Cell 1 (Markdown) -->
-<a href="https://colab.research.google.com/github/JulianNguyen05/xiangqi-sorting-jetmax/blob/main/training/train_yolo11.ipynb" target="_parent"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/></a>
-
-<!-- Cell 2 (Markdown) -->
-## Chuẩn bị môi trường
-Kiểm tra GPU, mount Drive và cài ultralytics.
-
-```python
-# Cell 3 (Code)
-import torch
-print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'KHÔNG CÓ GPU - đổi runtime sang T4')
-
-from google.colab import drive
-drive.mount('/content/drive')
-
-!pip install -q ultralytics
-```
-
-```python
-# Cell 4 (Code)
-import os
-BASE = '/content/drive/MyDrive/datn'
-for p in [
-    f'{BASE}/merged/merged_v1.zip',
-    f'{BASE}/runs/yolo11n_640/weights/last.pt',
-    f'{BASE}/runs/yolo11n_640/args.yaml',
-    f'{BASE}/runs/yolo11n_640/results.csv',
-]:
-    print(os.path.exists(p), p)
-```
-
-<!-- Cell 5 (Markdown) -->
-## Giải nén dataset hợp nhất
-Copy merged_v1.zip từ Drive về máy Colab (đọc nhanh hơn đọc trực tiếp từ Drive) và kiểm tra số ảnh/nhãn mỗi tập.
-
-```python
-# Cell 6 (Code)
-import os, shutil
-
-BASE = '/content/drive/MyDrive/datn'
-MERGED = '/content/merged'
-
-if not os.path.isdir(f'{MERGED}/train'):
-    shutil.unpack_archive(f'{BASE}/merged/merged_v1.zip', MERGED)
-
-for s in ['train', 'val', 'test']:
-    print(s, len(os.listdir(f'{MERGED}/{s}/images')), 'ảnh |', len(os.listdir(f'{MERGED}/{s}/labels')), 'nhãn')
-
-print(open(f'{MERGED}/data.yaml').read())
-```
-
-<!-- Cell 7 (Markdown) -->
-## Kiểm tra nhãn trước khi huấn luyện
-Đảm bảo mỗi ảnh đều có file nhãn tương ứng và mọi class id nằm trong khoảng 0-13. Nhãn sai class id sẽ làm quá trình train báo lỗi hoặc cho kết quả sai.
-
-```python
-# Cell 8 (Code)
-import glob
-
-bad = 0
-for s in ['train', 'val', 'test']:
-    imgs = {os.path.splitext(f)[0] for f in os.listdir(f'{MERGED}/{s}/images')}
-    lbls = {os.path.splitext(f)[0] for f in os.listdir(f'{MERGED}/{s}/labels')}
-    print(s, '| ảnh thiếu nhãn:', len(imgs - lbls), '| nhãn thiếu ảnh:', len(lbls - imgs))
-    for p in glob.glob(f'{MERGED}/{s}/labels/*.txt'):
-        for line in open(p):
-            parts = line.split()
-            if parts and not (0 <= int(parts[0]) <= 13):
-                bad += 1
-print('Dòng nhãn có class id sai:', bad)
-```
-
-<!-- Cell 9 (Markdown) -->
-## Khai báo tham số huấn luyện
-Gom các siêu tham số vào một chỗ để dễ chỉnh. Kết quả được lưu thẳng vào Drive (`/datn/runs`) nên không mất khi Colab ngắt kết nối. Tên run `yolo11n_640` khớp với thư mục `runs/` trong dự án.
-
-```python
-# Cell 10 (Code)
-from ultralytics import YOLO
-
-DATA    = f'{MERGED}/data.yaml'
-PROJECT = f'{BASE}/runs'
-NAME    = 'yolo11n_640'
-
-EPOCHS  = 100
-IMGSZ   = 640
-BATCH   = 32
-```
-
-<!-- Cell 11 (Markdown) -->
-## Nạp mô hình YOLO11n pretrained
-Dùng trọng số `yolo11n.pt` đã huấn luyện sẵn trên COCO (transfer learning). Bản `n` (nano) nhỏ và nhanh, phù hợp triển khai lên Jetson Nano. Trọng số sẽ tự tải về lần đầu.
-
-```python
-# Cell 12 (Code)
-model = YOLO('yolo11n.pt')
-```
-
-<!-- Cell 13 (Markdown) -->
-## Huấn luyện mô hình
-Các tham số đáng chú ý:
-- `patience=30`: dừng sớm nếu 30 epoch liền không cải thiện.
-- `fliplr=0.0`: **tắt lật ngang** vì lật sẽ làm chữ Hán trên quân cờ bị đảo ngược, gây nhầm lớp.
-- `degrees=10`: xoay nhẹ, vì quân cờ trên băng chuyền có thể nằm lệch góc.
-- `save_period=10`: lưu checkpoint mỗi 10 epoch để dự phòng khi Colab ngắt.
-- `close_mosaic=10`: tắt mosaic ở 10 epoch cuối để mô hình ổn định hơn.
-
-Thời gian ước tính khoảng 1-2 giờ trên T4.
-
-```python
-# Cell 14 (Code)
-results = model.train(
-    data=DATA,
-    epochs=EPOCHS,
-    imgsz=IMGSZ,
-    batch=BATCH,
-    patience=30,
-    project=PROJECT,
-    name=NAME,
-    exist_ok=True,
-    save_period=10,
-    workers=2,
-    fliplr=0.0,
-    degrees=10,
-    close_mosaic=10,
-    plots=True,
-)
-```
-
-<!-- Cell 15 (Markdown) -->
-## Tiếp tục huấn luyện nếu bị ngắt giữa chừng
-Chỉ chạy ô này khi Colab ngắt kết nối lúc đang train. Chạy lại phần chuẩn bị môi trường và giải nén dataset, bỏ qua bước 4, rồi chạy ô dưới để train tiếp từ checkpoint `last.pt`.
-
-```python
-# Cell 16 (Code)
-# model = YOLO(f'{PROJECT}/{NAME}/weights/last.pt')
-# model.train(resume=True)
-```
-
-<!-- Cell 17 (Markdown) -->
-## Xem kết quả huấn luyện
-Đọc `results.csv` và vẽ đường loss cùng mAP theo từng epoch. Loss giảm đều và mAP tăng rồi đi ngang là dấu hiệu huấn luyện tốt. Nếu loss val tăng trong khi loss train giảm thì mô hình đang overfit.
-
-```python
-# Cell 18 (Code)
-import pandas as pd
-import matplotlib.pyplot as plt
-
-df = pd.read_csv(f'{PROJECT}/{NAME}/results.csv')
-df.columns = df.columns.str.strip()
-
-fig, ax = plt.subplots(1, 2, figsize=(13, 4))
-for c in ['train/box_loss', 'val/box_loss', 'train/cls_loss', 'val/cls_loss']:
-    ax[0].plot(df['epoch'], df[c], label=c)
-ax[0].set_title('Loss'); ax[0].set_xlabel('epoch'); ax[0].legend()
-
-for c in ['metrics/mAP50(B)', 'metrics/mAP50-95(B)']:
-    ax[1].plot(df['epoch'], df[c], label=c)
-ax[1].set_title('mAP (val)'); ax[1].set_xlabel('epoch'); ax[1].legend()
-plt.show()
-
-print(df[['epoch', 'metrics/precision(B)', 'metrics/recall(B)',
-          'metrics/mAP50(B)', 'metrics/mAP50-95(B)']].tail(3))
-```
-
-<!-- Cell 19 (Markdown) -->
-## Đánh giá trên tập test
-Tập test chưa từng được dùng khi huấn luyện hay chọn mô hình, nên đây là con số khách quan để báo cáo. Mục tiêu trong đề cương là **mAP@0.5 ≥ 95%**. Bảng bên dưới cho biết từng lớp để phát hiện lớp nào còn yếu.
-
-```python
-# Cell 20 (Code)
-best = YOLO(f'{PROJECT}/{NAME}/weights/best.pt')
-metrics = best.val(data=DATA, split='test', imgsz=IMGSZ, project=PROJECT, name=f'{NAME}_test', exist_ok=True)
-
-print(f'mAP@0.5     : {metrics.box.map50:.4f}')
-print(f'mAP@0.5:0.95: {metrics.box.map:.4f}')
-print(f'Precision   : {metrics.box.mp:.4f} | Recall: {metrics.box.mr:.4f}')
-
-print('\nmAP@0.5 theo lớp:')
-for i, name in best.names.items():
-    print(f'  {name:15s} {metrics.box.ap50[i]:.4f}')
-```
-
-<!-- Cell 21 (Markdown) -->
-## Dự đoán thử trên ảnh test
-Chọn ngẫu nhiên vài ảnh từ tập test để xem mô hình khoanh vùng và gán nhãn có hợp lý không. Bước này hữu ích để đưa vào báo cáo.
-
-```python
-# Cell 22 (Code)
-import random
-from IPython.display import Image, display
-
-samples = random.sample(glob.glob(f'{MERGED}/test/images/*'), 4)
-preds = best.predict(samples, imgsz=IMGSZ, conf=0.5, save=True,
-                     project=PROJECT, name=f'{NAME}_pred', exist_ok=True)
-
-for r in preds:
-    display(Image(filename=os.path.join(r.save_dir, os.path.basename(r.path))))
-```
-
-<!-- Cell 23 (Markdown) -->
-## Xuất mô hình sang ONNX
-`best.pt` dùng được ngay với Ultralytics, còn ONNX là định dạng trung gian để chuyển sang TensorRT. **Lưu ý:** file TensorRT (`.engine`) phải được tạo trực tiếp trên Jetson, không tạo trên Colab được, vì nó phụ thuộc vào GPU và phiên bản TensorRT của thiết bị.
-
-```python
-# Cell 24 (Code)
-onnx_path = best.export(format='onnx', imgsz=IMGSZ, simplify=True)
-print('Đã xuất:', onnx_path)
-print('Các file trong thư mục weights:', os.listdir(f'{PROJECT}/{NAME}/weights'))
-```
-
-<!-- Cell 25 (Markdown) -->
-## Tải kết quả về máy
-Nén thư mục kết quả và tải về, giải nén vào `runs/yolo11n_640/` trong dự án. Bản gốc vẫn còn trên Drive.
-
-```python
-# Cell 26 (Code)
-from google.colab import files
-
-shutil.make_archive('/content/yolo11n_640', 'zip', f'{PROJECT}/{NAME}')
-files.download('/content/yolo11n_640.zip')
-```
-
----
-
-## Nhóm 5: Cấu hình danh sách Class & Dataset Config
-
-> ⚠️ Không tìm thấy file nào thuộc nhóm này trong dự án.
-
-## Nhóm 6: Reference Scripts & API mẫu
+## Nhóm 3: Tham chiếu SDK của robot (để viết motion.py đúng API)
 
 ### `docs\robot-reference\waste_classification_stepper.py`
 
@@ -2365,7 +2972,257 @@ if __name__ == '__main__':
 
 ---
 
-## Nhóm 7: Tổng quan dự án
+## Nhóm 4: Chỉ gửi nếu tôi hỏi thêm
+
+### `tests\test_game.py`
+
+*Dung lượng: 6.51 KB | Số dòng: 153*
+
+```python
+#!/usr/bin/env python3
+# Kiểm thử nhận diện nước đi, engine, ánh xạ ảnh -> ô cờ và cả ván mô phỏng. Không cần robot/ROS.
+#   python3 tests/test_game.py
+
+import os, sys, random
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, '..', 'robot')]
+
+from xiangqi_rules import Position, move_uci
+from engine import SimpleEngine
+from game import detect_move, BoardStabilizer, Game, make_info
+from vision_board import ImageBoardMapper
+from play_sim import build
+from game import play
+
+
+def test_detect_every_move():
+    rng = random.Random(0)
+    pos = Position.start()
+    for _ in range(40):                           # đi ngẫu nhiên 40 nước, kiểm tra mọi nước hợp lệ ở mỗi thế cờ
+        for m in pos.legal_moves():
+            r = detect_move(pos, pos.make(m).to_dict())
+            assert r.status == 'move' and r.move == m, (move_uci(m), r)
+        assert detect_move(pos, pos.to_dict()).status == 'nochange'
+        moves = pos.legal_moves()
+        if not moves:
+            break
+        pos = pos.make(rng.choice(moves))
+
+
+def test_detect_noise_never_wrong():
+    rng = random.Random(1)
+    pos = Position.start()
+    wrong = ok = 0
+    for _ in range(30):
+        moves = pos.legal_moves()
+        if not moves:
+            break
+        for m in moves:
+            obs = pos.make(m).to_dict()
+            del obs[rng.choice(sorted(obs))]      # YOLO bỏ sót một quân bất kỳ
+            r = detect_move(pos, obs, tolerance=1)
+            if r.status == 'move':
+                if r.move == m:
+                    ok += 1
+                else:
+                    wrong += 1
+        pos = pos.make(rng.choice(moves))
+    assert wrong == 0, 'nhận nhầm nước đi %d lần' % wrong
+    assert ok > 0
+    print('   (bỏ sót 1 quân: nhận đúng %d, không bao giờ nhận sai)' % ok)
+
+
+def test_no_move_with_noise():
+    pos = Position.start()
+    obs = pos.to_dict()
+    del obs[(4, 9)]                               # mất tướng đen trong ảnh, quân đen không thể là nước của người đi đỏ
+    assert detect_move(pos, obs).status == 'nochange'
+    obs = pos.to_dict()
+    del obs[(4, 0)]                               # mất tướng đỏ: có thể là nhiễu, cũng có thể tướng vừa đi mà ảnh không
+    assert detect_move(pos, obs).status == 'ambiguous'   # thấy ở ô mới -> không đoán, chờ khung hình sau
+
+
+def test_invalid_board():
+    pos = Position.start()
+    obs = pos.to_dict()
+    del obs[(0, 3)], obs[(2, 3)], obs[(4, 3)]     # mất 3 tốt: không nước nào khớp
+    assert detect_move(pos, obs).status == 'invalid'
+
+
+def test_stabilizer():
+    s = BoardStabilizer(3)
+    a = {(0, 0): 'R', (1, 0): 'N'}
+    assert s.update(a) is None and s.update(a) is None
+    assert s.update(a) == a
+    flicker = {(0, 0): 'R'}                       # một khung hình bỏ sót quân vẫn qua được nhờ bỏ phiếu
+    assert s.update(flicker) == a
+
+
+def test_human_confirm():
+    g = Game('red', SimpleEngine(seed=0), confirm=2)
+    after = g.pos.make(g.pos.legal_moves()[0]).to_dict()
+    r, info = g.human_observed(after)
+    assert r.status == 'pending' and info is None
+    r, info = g.human_observed(after)
+    assert r.status == 'move' and info is not None and info.by == 'human'
+
+
+def test_engine_legal_and_captures():
+    # robot (đỏ) có xe ăn được pháo đen không được bảo vệ -> với độ sâu 2 phải ăn khi không "đi lệch"
+    pos = Position.from_fen('5k3/9/9/9/4c4/9/9/9/4R4/3K5 w')
+    eng = SimpleEngine('hard', seed=0)
+    assert move_uci(eng.choose(pos)) == 'e1e5'
+
+
+def test_uci_engine_with_fake():
+    from engine import UciEngine
+    fake = os.path.join(HERE, 'fake_uci_engine.py')
+    eng = UciEngine(sys.executable, level='hard', args=[fake], seed=0)    # hard: luôn chọn nước tốt nhất
+    try:
+        pos = Position.start()
+        assert eng.options >= {'Threads', 'Hash', 'MultiPV', 'EvalFile'}
+        # phải lấy kết quả ở độ sâu LỚN NHẤT (depth 2), không phải depth 1: nước đầu tiên trong danh sách hợp lệ
+        assert eng.choose(pos) == pos.legal_moves()[0]
+        for _ in range(3):                         # nhiều lần liên tiếp trên nhiều thế cờ khác nhau
+            pos = pos.make(eng.choose(pos))
+            assert pos.legal_moves()
+        easy = UciEngine(sys.executable, level='easy', args=[fake], seed=1)
+        try:
+            legal = set(pos.legal_moves())
+            for _ in range(20):
+                assert easy.choose(pos) in legal
+        finally:
+            easy.close()
+    finally:
+        eng.close()
+
+
+def test_image_mapper():
+    # ảnh giả: bàn cờ phóng 50 px/ô, góc a0 ở (100, 600), trục y ảnh hướng LÊN khi hàng tăng (xoay lật tuỳ ý)
+    corners = {'a0': (100, 600), 'i0': (500, 600), 'a9': (100, 150), 'i9': (500, 150)}
+    m = ImageBoardMapper(corners)
+    names = ['%s_%s' % (c, p) for c in ('black', 'red')
+             for p in ('advisor', 'bishop', 'cannon', 'king', 'knight', 'pawn', 'rook')]
+    cx, cy = 100 + 4 * 50, 600 - 0 * 50           # ô e0
+    dets = [(cx - 20, cy - 20, cx + 20, cy + 20, 0.9, names.index('red_king')),
+            (100 + 7 * 50 - 20, 600 - 2 * 50 - 20, 100 + 7 * 50 + 20, 600 - 2 * 50 + 20, 0.8, names.index('red_cannon')),
+            (100 + 3.5 * 50 - 20, 150 - 20, 100 + 3.5 * 50 + 20, 150 + 20, 0.7, names.index('black_rook'))]  # lệch giữa 2 ô
+    board, warns = m.board_from_detections(dets, names)
+    assert board == {(4, 0): 'K', (7, 2): 'C'}, board
+    assert len(warns) == 1
+
+
+def test_full_game_with_noise():
+    for human in ('red', 'black'):
+        game, sim = build(human, level='easy', noise=0.03, auto=True, seed=7, max_plies=60, log=lambda *a: None)
+        play(game, sim.observe, log=lambda *a: None, poll=0)
+        # mọi nước trong lịch sử phải hợp lệ khi phát lại từ đầu, và thế cờ cuối khớp thế cờ vật lý
+        pos = Position.start()
+        for info in game.history:
+            assert pos.is_legal(info.move), info.uci
+            pos = pos.make(info.move)
+        assert pos.fen() == game.pos.fen()
+        robot_first = game.history[0].by
+        assert robot_first == ('robot' if human == 'black' else 'human')
+        print('   (%s: %d nước, kết quả %s)' % (human, len(game.history), game.result()))
+
+
+if __name__ == '__main__':
+    for name, fn in sorted((k, v) for k, v in globals().items() if k.startswith('test_')):
+        fn()
+        print('OK  ', name)
+    print('TẤT CẢ ĐỀU ĐẠT')
+```
+
+---
+
+### `tests\test_rules.py`
+
+*Dung lượng: 2.92 KB | Số dòng: 79*
+
+```python
+#!/usr/bin/env python3
+# Kiểm thử luật cờ tướng. Không cần robot/ROS.
+#   python3 tests/test_rules.py            # perft độ sâu 1-3 + các tình huống riêng (vài giây)
+#   python3 tests/test_rules.py --deep     # thêm perft độ sâu 4 (3.290.240 nút, chậm trên Jetson)
+# Số perft từ thế cờ ban đầu của cờ tướng: 44, 1920, 79666, 3290240 (số chuẩn dùng để kiểm tra bộ sinh nước đi).
+
+import os, sys, time
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, '..', 'robot')]
+
+from xiangqi_rules import Position, perft, move_uci, parse_uci, START_FEN
+
+PERFT = {1: 44, 2: 1920, 3: 79666, 4: 3290240}
+
+
+def uci_set(fen, only_from=None):
+    pos = Position.from_fen(fen)
+    ms = [move_uci(m) for m in pos.legal_moves()]
+    if only_from:
+        ms = [m for m in ms if m.startswith(only_from)]
+    return set(ms)
+
+
+def test_fen_roundtrip():
+    assert Position.start().fen() == START_FEN
+    p = Position.from_fen('R3k4/R8/9/9/9/9/9/9/9/3K5 b')
+    assert Position.from_fen(p.fen()).fen() == p.fen()
+
+
+def test_flying_general():
+    # tướng đỏ không được sang cột d vì sẽ đối mặt tướng đen ở d9
+    assert uci_set('3k5/9/9/9/9/9/9/9/9/4K4 w') == {'e0f0', 'e0e1'}
+
+
+def test_knight_leg():
+    free = uci_set('5k3/9/9/9/9/9/9/9/4N4/3K5 w', 'e1')
+    assert len(free) == 6, free
+    blocked = uci_set('5k3/9/9/9/9/9/9/4p4/4N4/3K5 w', 'e1')    # tốt đen ở e2 cản chân mã
+    assert len(blocked) == 4 and 'e1f3' not in blocked and 'e1d3' not in blocked, blocked
+
+
+def test_cannon_screen():
+    ms = uci_set('5k3/9/9/9/4r4/9/4P4/9/4C4/3K5 w', 'e1')
+    assert 'e1e2' in ms                # đi không ăn
+    assert 'e1e5' in ms                # ăn xe đen qua ngòi là tốt e3
+    assert 'e1e3' not in ms and 'e1e4' not in ms
+
+
+def test_bishop_river():
+    ms = uci_set('5k3/9/9/9/9/2B6/9/9/9/3K5 w', 'c4')
+    assert ms == {'c4a2', 'c4e2'}, ms
+
+
+def test_pawn():
+    assert uci_set('5k3/9/9/9/9/9/P8/9/9/4K4 w', 'a3') == {'a3a4'}             # chưa qua sông: chỉ đi thẳng
+    assert uci_set('5k3/9/9/9/4P4/9/9/9/9/3K5 w', 'e5') == {'e5e6', 'e5d5', 'e5f5'}   # qua sông: thêm đi ngang
+
+
+def test_checkmate():
+    assert Position.from_fen('R3k4/R8/9/9/9/9/9/9/9/3K5 b').result() == 'checkmate'
+    assert Position.start().result() == 'ongoing'
+
+
+def test_perft(deep=False):
+    pos = Position.start()
+    for d in (1, 2, 3, 4) if deep else (1, 2, 3):
+        t = time.time()
+        n = perft(pos, d)
+        print('  perft(%d) = %d  (chuẩn %d)  %.1fs' % (d, n, PERFT[d], time.time() - t))
+        assert n == PERFT[d], 'perft(%d) sai: %d != %d' % (d, n, PERFT[d])
+
+
+if __name__ == '__main__':
+    for name, fn in sorted((k, v) for k, v in globals().items() if k.startswith('test_') and k != 'test_perft'):
+        fn()
+        print('OK  ', name)
+    test_perft('--deep' in sys.argv)
+    print('OK   test_perft')
+    print('TẤT CẢ ĐỀU ĐẠT')
+```
+
+---
 
 ### `README.md`
 

@@ -1,0 +1,33 @@
+# Các điểm dừng của camera khi quét bàn cờ (dùng cho robot/vision_multi.py).
+# Mỗi view = một vị trí thanh trượt + tư thế tay máy cố định. Ở mỗi view, chụp một ảnh, rồi ghi pixel (x, y) của
+# >= 4 giao điểm bạn nhận ra được trong ảnh (rải đều, càng nhiều càng chính xác). Tên ô theo quy ước board.yaml.
+# Dạy lại points mỗi khi đổi slider/arm của view đó. Kiểm tra: python3 robot/vision_multi.py configs/views.yaml
+image_size: [640, 480]
+piece_half: 22        # nửa kích thước quân cờ trong ảnh (pixel)
+max_offset: 0.35
+anchor_y: 0.5
+views:
+  - name: trai
+    slider: 0
+    arm: [0, -150, 120]
+    points:
+      a0: null        # ví dụ: [112, 438]
+      a9: null
+      d0: null
+      d9: null
+  - name: giua
+    slider: 1500
+    arm: [0, -150, 120]
+    points:
+      c0: null
+      c9: null
+      f0: null
+      f9: null
+  - name: phai
+    slider: 3000
+    arm: [0, -150, 120]
+    points:
+      f0: null
+      f9: null
+      i0: null
+      i9: null

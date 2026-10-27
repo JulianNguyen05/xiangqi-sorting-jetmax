@@ -6,62 +6,52 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.resolve()
 OUTPUT_FILE = PROJECT_ROOT / "gathered_code.md"
 
-# Định nghĩa danh sách các nhóm file cần thu thập
+# Định nghĩa chính xác 4 nhóm file cần thu thập
 GROUPS = [
     {
-        "name": "Nhóm 1: Core Robot (Board, Detect View, Motion)",
+        "name": "Nhóm 1: Lõi hệ thống (bắt buộc)",
         "patterns": [
             "robot/board.py",
+            "robot/vision_board.py",
             "robot/detect_view.py",
+            "robot/engine.py",
+            "robot/game.py",
             "robot/motion.py",
-        ],
-    },
-    {
-        "name": "Nhóm 2: Cấu hình hệ thống (Configs)",
-        "patterns": [
+            "robot/xiangqi_rules.py",
             "configs/board.yaml",
+            "configs/vision.yaml",
         ],
     },
     {
-        "name": "Nhóm 3: Test Scripts & Kịch bản thử nghiệm",
+        "name": "Nhóm 2: Cách bạn đang điều khiển tay và chạy mô phỏng",
         "patterns": [
+            "tests/play_sim.py",
+            "tests/fake_uci_engine.py",
+            "tests/scan_detect.py",
             "tests/move_piece.py",
             "tests/pick_place.py",
-            "tests/scan_detect.py",
+            "tests/joint_teleop.py",
         ],
     },
     {
-        "name": "Nhóm 4: Huấn luyện, Cấu trúc Class & Dataset",
-        "patterns": [
-            "training/README.md",
-            "training/build_dataset.ipynb",
-            "training/train_yolo11.ipynb",
-        ],
-    },
-    {
-        "name": "Nhóm 5: Cấu hình danh sách Class & Dataset Config",
-        "patterns": [
-            "**/data.yaml",
-            "data.yaml",
-        ],
-    },
-    {
-        "name": "Nhóm 6: Reference Scripts & API mẫu",
+        "name": "Nhóm 3: Tham chiếu SDK của robot (để viết motion.py đúng API)",
         "patterns": [
             "docs/robot-reference/waste_classification_stepper.py",
             "docs/robot-reference/jetmax_control/scripts/jetmax_control_main.py",
         ],
     },
     {
-        "name": "Nhóm 7: Tổng quan dự án",
+        "name": "Nhóm 4: Chỉ gửi nếu tôi hỏi thêm",
         "patterns": [
+            "tests/test_game.py",
+            "tests/test_rules.py",
             "README.md",
         ],
     },
 ]
 
-# Các định dạng file trọng số mô hình (chỉ lấy thông tin tên và kích thước)
-WEIGHTS_EXTENSIONS = {".pt", ".onnx", ".engine", ".pth", ".weights", ".tflite", ".bin", ".pkl"}
+# Các định dạng file trọng số / nhị phân (phòng trường hợp có file binary)
+WEIGHTS_EXTENSIONS = {".pt", ".onnx", ".engine", ".pth", ".weights", ".tflite", ".bin", ".pkl", ".nnue"}
 
 
 def format_size(size_bytes: int) -> str:
@@ -74,26 +64,18 @@ def format_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024):.2f} MB"
 
 
-def resolve_files(pattern: str) -> list[Path]:
-    """Tìm danh sách file phù hợp dựa trên đường dẫn tuyệt đối, tương đối hoặc wildcard pattern."""
-    found = []
-    if "*" in pattern or "?" in pattern:
-        for p in PROJECT_ROOT.glob(pattern):
-            if p.is_file() and p.name != "gathered_code.md":
-                found.append(p)
-    else:
-        direct_path = PROJECT_ROOT / pattern
-        if direct_path.exists() and direct_path.is_file():
-            found.append(direct_path)
-        else:
-            filename = Path(pattern).name
-            matches = [
-                p for p in PROJECT_ROOT.rglob(filename) 
-                if p.is_file() and p.name != "gathered_code.md"
-            ]
-            if matches:
-                found.append(matches[0])
-    return found
+def resolve_file(rel_path_str: str) -> Path | None:
+    """Tìm file dựa trên đường dẫn tương đối từ PROJECT_ROOT."""
+    file_path = PROJECT_ROOT / rel_path_str
+    if file_path.exists() and file_path.is_file():
+        return file_path
+    
+    # Tìm kiếm linh hoạt nếu đường dẫn dùng dấu xoẹt ngang/ngược trên Windows
+    alt_path = PROJECT_ROOT / rel_path_str.replace("/", os.sep)
+    if alt_path.exists() and alt_path.is_file():
+        return alt_path
+        
+    return None
 
 
 def get_language_tag(filepath: Path) -> str:
@@ -115,7 +97,7 @@ def get_language_tag(filepath: Path) -> str:
 
 
 def render_notebook(filepath: Path) -> str:
-    """Trích xuất cell code và markdown từ Jupyter Notebook để hiển thị rõ ràng."""
+    """Trích xuất cell code và markdown từ Jupyter Notebook nếu có."""
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             nb = json.load(f)
@@ -139,12 +121,11 @@ def main():
 
     for group in GROUPS:
         group_files = []
-        for pattern in group["patterns"]:
-            matches = resolve_files(pattern)
-            for file_path in matches:
-                if file_path not in seen_paths:
-                    seen_paths.add(file_path)
-                    group_files.append(file_path)
+        for rel_path_str in group["patterns"]:
+            file_path = resolve_file(rel_path_str)
+            if file_path and file_path not in seen_paths:
+                seen_paths.add(file_path)
+                group_files.append(file_path)
         grouped_results.append((group["name"], group_files))
         total_found += len(group_files)
 
@@ -153,6 +134,7 @@ def main():
         out.write(f"- **Thư mục gốc:** `{PROJECT_ROOT}`\n")
         out.write(f"- **Tổng số file đã gôm:** {total_found}\n\n")
 
+        # Tạo mục lục
         out.write("## Mục lục\n\n")
         for group_name, files in grouped_results:
             out.write(f"### {group_name}\n")
@@ -160,13 +142,20 @@ def main():
                 out.write("  *(Không tìm thấy file nào)*\n")
             for file_path in files:
                 rel_path = file_path.relative_to(PROJECT_ROOT)
-                anchor = str(rel_path).replace("\\", "/").replace("/", "").replace(".", "").lower()
+                anchor = (
+                    str(rel_path)
+                    .replace("\\", "/")
+                    .replace("/", "")
+                    .replace(".", "")
+                    .replace("_", "")
+                    .lower()
+                )
                 out.write(f"- [{rel_path}](#{anchor})\n")
             out.write("\n")
 
         out.write("---\n\n")
 
-        # Ghi nội dung từng nhóm file
+        # Ghi nội dung chi tiết từng file theo nhóm
         for group_name, files in grouped_results:
             out.write(f"## {group_name}\n\n")
             if not files:
@@ -181,9 +170,9 @@ def main():
                 out.write(f"### `{rel_path}`\n\n")
 
                 if ext in WEIGHTS_EXTENSIONS:
-                    out.write(f"- **Loại file:** Model Weights ({ext})\n")
+                    out.write(f"- **Loại file:** Binary / Model ({ext})\n")
                     out.write(f"- **Kích thước file:** {size_str}\n")
-                    out.write("> ℹ️ *Nội dung file nhị phân được bỏ qua.* \n\n")
+                    out.write("> ℹ️ *Nội dung nhị phân được bỏ qua.* \n\n")
                 elif ext == ".ipynb":
                     out.write(f"*File Jupyter Notebook | Dung lượng: {size_str}*\n\n")
                     nb_content = render_notebook(file_path)
@@ -205,7 +194,7 @@ def main():
 
                 out.write("---\n\n")
 
-    print(f"✅ Đã cập nhật xong `gathered_code.md` với tổng cộng {total_found} file.")
+    print(f"✅ Đã gom xong {total_found} file vào `gathered_code.md` theo đúng 4 nhóm chỉ định.")
 
 
 if __name__ == "__main__":
