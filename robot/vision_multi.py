@@ -70,30 +70,60 @@ class View(object):
         """0 ở tâm ảnh, 1 ở góc ảnh: quân ở giữa ảnh ít méo hơn quân ở rìa."""
         return min(1.0, np.hypot((x - self.w / 2) / (self.w / 2), (y - self.h / 2) / (self.h / 2)) / 1.414)
 
-    def cells(self, dets, names):
-        """Trả về ({(f, r): (ký tự quân, điểm)}, cảnh báo) cho một khung ảnh của view này."""
-        out, warns = {}, []
+    def explain(self, dets, names):
+        """Số phận của từng khung phát hiện ở view này (dùng để vẽ ảnh chẩn đoán và đếm thống kê).
+        Mỗi phần tử: dict(box, conf, name, piece, cell, score, offset, status), status là một trong
+          ok       : được nhận vào ô `cell`
+          dup      : cùng ô với một khung khác có điểm cao hơn (bị bỏ)
+          edge     : sát mép ảnh, quân bị cắt dở (bị bỏ)
+          outside  : rơi ngoài lưới 9x10 (khay, tay người...) (bị bỏ)
+          offcentre: lệch tâm ô quá max_offset (bị bỏ)
+          unknown  : tên lớp lạ (bị bỏ)"""
+        recs, best = [], {}
         for x1, y1, x2, y2, conf, cls in dets:
             k = int(cls)
             name = names[k] if k < len(names) else str(k)
             piece = class_to_piece(name)
+            r = dict(box=(float(x1), float(y1), float(x2), float(y2)), conf=float(conf), name=name, piece=piece,
+                     cell=None, score=0.0, offset=None, status='ok')
+            recs.append(r)
             if piece is None:
-                warns.append('[%s] lớp lạ "%s"' % (self.name, name))
+                r['status'] = 'unknown'
                 continue
             if x1 < self.mx or y1 < self.my or x2 > self.w - self.mx or y2 > self.h - self.my:
-                continue                                        # quân bị cắt ở mép ảnh: view khác sẽ thấy rõ hơn
+                r['status'] = 'edge'
+                continue
             cx, cy = (x1 + x2) / 2.0, y1 + (y2 - y1) * self.anchor_y
             gf, gr = _apply(self.H, cx, cy)
-            f, r = int(round(gf)), int(round(gr))
-            if not (0 <= f < NF and 0 <= r < NR):
-                continue                                        # ngoài bàn cờ (quân ở khay, tay người...)
-            if abs(gf - f) > self.max_offset or abs(gr - r) > self.max_offset:
-                warns.append('[%s] %s lệch tâm ô %s (%.2f, %.2f)' % (self.name, name, square_name(f, r),
-                                                                      gf - f, gr - r))
+            f, rk = int(round(gf)), int(round(gr))
+            if not (0 <= f < NF and 0 <= rk < NR):
+                r['status'] = 'outside'
                 continue
-            score = float(conf) * (1.0 - 0.3 * self.centre_penalty(cx, cy))
-            if (f, r) not in out or score > out[(f, r)][1]:
-                out[(f, r)] = (piece, score)
+            r['cell'], r['offset'] = (f, rk), (gf - f, gr - rk)
+            if abs(gf - f) > self.max_offset or abs(gr - rk) > self.max_offset:
+                r['status'] = 'offcentre'
+                continue
+            r['score'] = float(conf) * (1.0 - 0.3 * self.centre_penalty(cx, cy))
+            old = best.get((f, rk))
+            if old is not None and old['score'] >= r['score']:
+                r['status'] = 'dup'
+            else:
+                if old is not None:
+                    old['status'] = 'dup'
+                best[(f, rk)] = r
+        return recs
+
+    def cells(self, dets, names):
+        """Trả về ({(f, r): (ký tự quân, điểm)}, cảnh báo) cho một khung ảnh của view này."""
+        out, warns = {}, []
+        for r in self.explain(dets, names):
+            if r['status'] == 'ok':
+                out[r['cell']] = (r['piece'], r['score'])
+            elif r['status'] == 'unknown':
+                warns.append('[%s] lớp lạ "%s"' % (self.name, r['name']))
+            elif r['status'] == 'offcentre':
+                warns.append('[%s] %s lệch tâm ô %s (%.2f, %.2f)' % (
+                    self.name, r['name'], square_name(*r['cell']), r['offset'][0], r['offset'][1]))
         return out, warns
 
 

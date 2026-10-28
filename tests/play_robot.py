@@ -199,63 +199,27 @@ def build_hardware(a, log):
         raise SystemExit('Còn LỖI trong cấu hình, chưa chạy. Sửa rồi chạy lại.')
     board, tray, mapper = objs['board'], objs['tray'], objs['mapper']
 
-    import rospy, cv2
-    import numpy as np
-    from sensor_msgs.msg import Image
-    from detect_view import load_backend
-    import motion
+    from rig import HardwareRig
 
-    detector = load_backend(os.path.expanduser(a.model), a.conf, a.iou)       # nạp mô hình trước khi động tới robot
     save_dir = None
     if not a.no_save:
         save_dir = a.save_dir or os.path.join(ROOT, 'runs', time.strftime('%Y%m%d_%H%M%S'))
         os.makedirs(save_dir, exist_ok=True)
         log('Lưu ảnh quét và nước đi vào %s' % save_dir)
 
-    rospy.init_node('play_robot')
-    state, cur = {'img': None, 'n': 0, 'saved': 0}, {'view': '-'}
-
-    def on_image(msg):
-        state['img'] = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, 3).copy()    # RGB
-        state['n'] += 1
-    rospy.Subscriber(TOPIC, Image, on_image, queue_size=1)
-
-    mv = motion.Mover()
-    mover = HoverOnlyMover(mv) if a.hover else mv
-    lift = max(board.z_safe, motion.SLIDER_MIN_Z + 10.0)
-
-    def grab():
-        t0, n0 = time.time(), state['n']
-        while state['n'] < n0 + 2:                        # đợi khung hình mới sau khi dừng hẳn
-            if time.time() - t0 > 3:
-                raise RuntimeError('Không nhận được ảnh từ ' + TOPIC)
-            time.sleep(0.02)
-        bgr = cv2.cvtColor(state['img'], cv2.COLOR_RGB2BGR)         # mô hình train trên ảnh BGR
-        if save_dir:
-            cv2.imwrite(os.path.join(save_dir, 'scan%04d_%s.jpg' % (state['saved'], cur['view'])), bgr)
-            state['saved'] += 1
-        return bgr
-
-    def raise_arm():
-        p = mv.status()
-        if p[2] < lift:
-            mv.goto((p[0], p[1], lift))
-
-    def move_to(view):
-        raise_arm()                                       # chỉ trượt khi tay máy đã nâng đủ cao
-        mv.slide_to(view.slider)
-        mv.goto(tuple(view.arm))
-        rospy.sleep(0.3)
-        cur['view'] = view.name
-
-    def park():
-        raise_arm()
-        mv.slide_to(0)
-        mv.goto(mv.start)
-
     def ask(text):
         if input(text + ' [Enter = tiếp tục, q = dừng] ').strip().lower() == 'q':
             raise KeyboardInterrupt
+
+    rig = HardwareRig(model=a.model, conf=a.conf, iou=a.iou, z_safe=board.z_safe, node='play_robot', log=log, ask=ask)
+    if save_dir:
+        saved = {'n': 0}
+
+        def saver(view, bgr):
+            rig.cv2.imwrite(os.path.join(save_dir, 'scan%04d_%s.jpg' % (saved['n'], view)), bgr)
+            saved['n'] += 1
+        rig.saver = saver
+    mover = HoverOnlyMover(rig.mv) if a.hover else rig.mv
 
     def repair(game, ex):
         log('Hãy xếp lại bàn cờ cho KHỚP thế cờ dưới đây (nếu quân bị ăn đang nằm trong khay thì đặt lại về ô):')
@@ -266,16 +230,12 @@ def build_hardware(a, log):
         return int(s) if s else None
 
     ctx = Ctx()
-    ctx.executor = JetMaxExecutor(mover, board, tray, limits=motion.in_limits, log=log)
-    ctx.observer = ScanObserver(mapper, detector, move_to, grab, BoardStabilizer(a.frames))
+    ctx.executor = JetMaxExecutor(mover, board, tray, limits=rig.motion.in_limits, log=log)
+    ctx.observer = ScanObserver(mapper, rig.detector, rig.move_to, rig.grab, BoardStabilizer(a.frames))
     ctx.wait_human = lambda game: ask('Bạn đi xong và đã rút tay khỏi bàn cờ?')
     ctx.confirm_start = lambda: ask('Xếp đủ quân đúng thế cờ ban đầu, rút tay khỏi bàn cờ?')
-    ctx.park, ctx.repair, ctx.poll, ctx.save_dir = park, repair, a.poll, save_dir
-    ctx.cleanup = lambda: mv.restore(board.z_safe)
-
-    log('Vị trí ban đầu của tay máy: %s' % (mv.start,))
-    ask('Đưa thanh trượt về HOME (tay máy phải đang nâng cao, không vướng)')
-    mv.home_slider()
+    ctx.park, ctx.repair, ctx.poll, ctx.save_dir = rig.park, repair, a.poll, save_dir
+    ctx.cleanup = lambda: rig.cleanup(board.z_safe)
     return ctx
 
 

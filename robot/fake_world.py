@@ -75,8 +75,13 @@ class FakeWorld(object):
                 continue
             f, r = parse_square(label)
             x, y = _project(h, f, r)
+            x1, y1, x2, y2 = float(x) - 20, float(y) - 20, float(x) + 20, float(y) + 20
+            cx1, cy1 = max(0.0, x1), max(0.0, y1)
+            cx2, cy2 = min(float(SIZE[0]), x2), min(float(SIZE[1]), y2)
+            if (cx2 - cx1) < 20 or (cy2 - cy1) < 20:       # gần như nằm ngoài ảnh: YOLO sẽ không phát hiện
+                continue
             name = ('red_' if p.isupper() else 'black_') + CODE[p.lower()]
-            dets.append((x - 20, y - 20, x + 20, y + 20, 0.9, NAMES.index(name)))
+            dets.append((cx1, cy1, cx2, cy2, 0.9, NAMES.index(name)))      # YOLO thật cắt khung theo mép ảnh
         return np.array(dets, np.float32).reshape(-1, 6)
 
     # ---- người chơi giả
