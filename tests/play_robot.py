@@ -26,7 +26,7 @@
 
 import os, sys, time, argparse
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(HERE, '..')
+ROOT = os.path.abspath(os.path.join(HERE, '..'))
 sys.path[:0] = [HERE, os.path.join(ROOT, 'robot')]
 
 from engine import create_engine, LEVELS

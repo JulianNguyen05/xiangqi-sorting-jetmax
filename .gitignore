@@ -1,24 +1,58 @@
-# Dữ liệu và kết quả huấn luyện (nặng): giữ thư mục, bỏ nội dung
-data/*
-!data/.gitkeep
-runs/*
-!runs/.gitkeep
+# ==========================================
+# 1. Engine Pikafish
+# ==========================================
+# Loại bỏ toàn bộ Pikafish (file thực thi đa nền tảng, wiki)
+Pikafish/*
+# Giữ lại duy nhất file trọng số NNUE để engine chạy
+!Pikafish/pikafish.nnue
 
-# Trọng số mô hình: bỏ hết, trừ bản triển khai trong robot/models/
+# ==========================================
+# 2. Trọng số Mô hình (Weights)
+# ==========================================
 *.pt
 *.onnx
 *.engine
+# Ngoại lệ: Giữ lại bản trọng số chính thức dùng triển khai trên Robot
 !robot/models/*.pt
 !robot/models/*.onnx
 
-# Python
+# ==========================================
+# 3. Dữ liệu & Kết quả huấn luyện (Nặng)
+# ==========================================
+data/*
+!data/.gitkeep
+
+runs/*
+!runs/.gitkeep
+
+# ==========================================
+# 4. Python, Cache & Môi trường ảo
+# ==========================================
 __pycache__/
 *.pyc
-.venv/
+*.pyo
+*.pyd
+.pytest_cache/
 .ipynb_checkpoints/
+.venv/
+venv/
+ENV/
 
-# IDE / hệ thống
+# File tự động sinh ra khi gom code
+gathered_code.md
+
+# ==========================================
+# 5. IDE & Hệ thống
+# ==========================================
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+*.swp
+
+# ==========================================
+# 6. File nén / Tài liệu dung lượng lớn (Tùy chọn)
+# ==========================================
+*.rar
+*.zip
+# docs/*.rar

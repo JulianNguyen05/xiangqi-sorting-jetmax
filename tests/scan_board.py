@@ -30,7 +30,7 @@
 
 import os, sys, re, csv, glob, time, argparse
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.join(HERE, '..')
+ROOT = os.path.abspath(os.path.join(HERE, '..'))
 sys.path[:0] = [HERE, os.path.join(ROOT, 'robot')]
 
 from board import square_name, NF, NR
@@ -435,27 +435,33 @@ def build_hardware(a, log):
     return ctx
 
 
-def capture_only(a, log):
-    """Chụp ảnh ở từng view trong views.yaml (chỉ cần slider và arm, chưa cần điểm dạy) để đọc toạ độ giao điểm."""
+def load_pose_views(path, names, log):
+    """Đọc các view chỉ cần slider và arm (chưa cần điểm dạy) từ views.yaml. Trả về [SimpleNamespace(name, slider, arm)]."""
     import yaml
     from types import SimpleNamespace
-    from rig import HardwareRig
-    import cv2
-    with open(a.views, encoding='utf-8') as f:
+    with open(path, encoding='utf-8') as f:
         d = yaml.safe_load(f) or {}
     views = []
     for v in d.get('views') or []:
         if v.get('slider') is None or not v.get('arm') or any(c is None for c in v['arm']):
             log('Bỏ qua view "%s": chưa điền slider/arm' % v.get('name'))
             continue
-        if a.view and v.get('name') not in a.view:
+        if names and v.get('name') not in names:
             continue
         if not preflight.get_limits()(tuple(v['arm'])):
             log('Bỏ qua view "%s": arm %s ngoài giới hạn an toàn' % (v.get('name'), v['arm']))
             continue
         views.append(SimpleNamespace(name=str(v['name']), slider=int(v['slider']), arm=tuple(v['arm'])))
     if not views:
-        raise SystemExit('Chưa có view nào điền đủ slider và arm trong %s' % a.views)
+        raise SystemExit('Chưa có view nào điền đủ slider và arm trong %s' % path)
+    return views
+
+
+def capture_only(a, log):
+    """Chụp ảnh ở từng view trong views.yaml (chỉ cần slider và arm, chưa cần điểm dạy) để đọc toạ độ giao điểm."""
+    from rig import HardwareRig
+    import cv2
+    views = load_pose_views(a.views, a.view, log)
 
     def ask(text):
         if not a.yes and input(text + ' [Enter = tiếp tục, q = dừng] ').strip().lower() == 'q':
