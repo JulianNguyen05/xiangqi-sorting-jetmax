@@ -40,6 +40,7 @@ ENV/
 
 # File tự động sinh ra khi gom code
 gathered_code.md
+file_tree.md
 
 # ==========================================
 # 5. IDE & Hệ thống
