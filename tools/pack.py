@@ -17,6 +17,9 @@ import zipfile
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 TOP = 'xiangqi'                                        # tên thư mục khi giải nén trên robot
 
+# CHỈ đóng gói những gì robot cần (danh sách trắng), không duyệt cả repo (.venv, dataset, run Colab... rất nặng)
+CODE = ['main.py', 'README.md', 'RUNBOOK.md', 'board', 'config', 'planner', 'robot', 'tests', 'tools', 'vision',
+        'samples/board_empty.jpg', 'samples/start_position.jpg', 'models/README.txt']
 SKIP_DIRS = {'.git', '__pycache__', '.pytest_cache', 'runs', 'captures', 'dist', 'training', '.vscode', '.idea'}
 SKIP_FILES = {'config/robot.local.yaml', 'config/calib.yaml'}     # số đo riêng của robot: không ghi đè
 SKIP_EXT = ('.pt', '.engine', '.src', '.zip', '.rar', '.pyc')
@@ -33,9 +36,14 @@ def add_tree(zf, rel_dirs, filt):
     n = 0
     for rel in rel_dirs:
         base = os.path.join(ROOT, rel)
+        if not os.path.exists(base):
+            print('  (bỏ qua, không có) ' + rel)
+            continue
+        print('  + ' + rel)
         if os.path.isfile(base):
-            zf.write(base, os.path.join(TOP, rel))
-            n += 1
+            if filt(rel):
+                zf.write(base, TOP + '/' + rel)
+                n += 1
             continue
         for d, dirs, files in os.walk(base):
             dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
@@ -59,12 +67,10 @@ else:
             return False
         if r.startswith('docs/') and not a.with_docs:
             return False
-        if r.startswith('models/') and a.no_model and r != 'models/README.txt':
-            return False
         return True
     out = os.path.join(ROOT, 'dist', 'xiangqi_to_robot.zip')
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zf:
-        n = add_tree(zf, ['.'], keep)
+        n = add_tree(zf, CODE + ([] if a.no_model else ['models/best.onnx']), keep)
     if not a.no_model and not os.path.exists(os.path.join(ROOT, 'models', 'best.onnx')):
         print('CẢNH BÁO: không có models/best.onnx trong gói')
 print('Đã tạo %s (%d file, %.1f MB)' % (out, n, os.path.getsize(out) / 1e6))
