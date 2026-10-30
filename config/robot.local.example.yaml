@@ -1,0 +1,21 @@
+# MẪU số đo trên robot. Lần đầu trên robot: cp config/robot.local.example.yaml config/robot.local.yaml
+# Chỉ ghi các mục cần đổi so với config/robot.yaml, cùng cấu trúc. robot.local.yaml ghi đè robot.yaml.
+# tools/pack.py KHÔNG đóng gói file này từ laptop sang, nên chép code mới không làm mất số đã đo.
+# Ví dụ (bỏ dấu # và sửa số):
+#
+# limits:
+#   x: [-140, 140]
+#   y: [-250, -90]
+#   r_max: 270.0
+# slider:
+#   enabled: true
+# views:
+#   - name: v0
+#     arm: [0.0, -160.0, 215.0]
+#     slider: 0
+#   - name: v1
+#     arm: [0.0, -160.0, 215.0]
+#     slider: 2500
+# detector:
+#   tta_rotations: [0]
+{}

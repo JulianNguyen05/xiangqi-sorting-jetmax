@@ -28,8 +28,25 @@ def save(rel, data, header=None):
     return p
 
 
+def _merge(base, over):
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+LOCAL = 'config/robot.local.yaml'
+
+
 def robot_cfg():
-    return load('config/robot.yaml')
+    """config/robot.yaml (mặc định, đi theo code) + config/robot.local.yaml (số đo trên robot, ghi đè).
+    Sửa thông số trên robot thì sửa robot.local.yaml: chép code mới từ laptop sang không làm mất số đã đo."""
+    cfg = load('config/robot.yaml')
+    if os.path.exists(path(LOCAL)):
+        _merge(cfg, load(LOCAL) or {})
+    return cfg
 
 
 def calib(cfg=None):

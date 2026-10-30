@@ -48,7 +48,7 @@ rb = Robot(cfg, cal, backend='ros')
 views = cfg['views']
 view = next((v for v in views if v['name'] == a.view), None) if a.view else views[0]
 if view is None:
-    sys.exit('Không có view tên %s trong config/robot.yaml' % a.view)
+    sys.exit('Không có view tên %s trong config/robot.yaml / robot.local.yaml' % a.view)
 out = config.path('captures')
 os.makedirs(out, exist_ok=True)
 

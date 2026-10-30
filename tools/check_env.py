@@ -51,14 +51,16 @@ try:
     import tensorrt as trt
     print(OK + 'tensorrt %s' % trt.__version__)
     try:
-        import pycuda.driver  # noqa: F401
-        print(OK + 'pycuda')
+        from vision.pieces import _CudaRT
+        _CudaRT()
+        print(OK + 'libcudart (chạy TensorRT không cần pycuda)')
         backs.append('trt')
     except Exception as e:
-        print(WARN + 'pycuda: %s  -> pip3 install pycuda (lâu ~10 phút)' % e)
+        print(BAD + 'libcudart: %s' % e)
 except Exception as e:
     print(WARN + 'tensorrt: %s' % e)
 print(OK + 'trtexec: ' + sh('ls /usr/src/tensorrt/bin/trtexec 2>/dev/null || echo "không thấy"'))
+print('  Robot không có mạng: KHÔNG pip install được. Cách chắc chạy nhất: python3 tools/build_engine.py (RUNBOOK 2c)')
 
 print('== ROS')
 try:
@@ -88,6 +90,13 @@ from robot import config  # noqa: E402
 cfg = config.robot_cfg()
 mp = config.path(cfg['detector']['model'])
 print((OK if os.path.exists(mp) else BAD) + 'model: %s' % mp)
+print((OK if os.path.exists(config.path(config.LOCAL)) else WARN) + 'config/robot.local.yaml: %s' % (
+    'có' if os.path.exists(config.path(config.LOCAL)) else 'chưa có -> cp config/robot.local.example.yaml config/robot.local.yaml'))
+eng = os.path.splitext(mp)[0] + '.engine'
+if os.path.exists(eng) and os.path.exists(mp):
+    from vision.pieces import engine_matches
+    print((OK if engine_matches(mp, eng) else BAD) + 'engine %s %s' % (
+        eng, 'khớp model' if engine_matches(mp, eng) else 'KHÔNG khớp model -> python3 tools/build_engine.py'))
 cal = config.calib(cfg)
 print((OK if cal else WARN) + 'calib: %s' % ('có, %d tư thế' % len(cal.get('poses', [])) if cal else 'chưa có (RUNBOOK mục 4)'))
 

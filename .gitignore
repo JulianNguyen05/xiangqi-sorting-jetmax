@@ -1,7 +1,10 @@
 runs/
 captures/
+dist/
 models/*.onnx
 models/*.engine
+models/*.src
 models/*.pt
+config/robot.local.yaml
 __pycache__/
 *.pyc

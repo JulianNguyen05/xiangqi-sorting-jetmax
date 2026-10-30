@@ -33,6 +33,9 @@ tư thế quan sát (1 hay nhiều view, có thể trượt)
 | `robot/motion.py` | Tay máy + hút + thanh trượt trong hệ thế giới; backend giả lập cho laptop |
 | `robot/camera.py`, `robot/jog.py`, `robot/config.py` | Camera ROS / ảnh file; lái bằng phím; đọc config |
 | `tools/check_env.py` | Kiểm tra môi trường robot + thử model |
+| `tools/build_engine.py` | Build TensorRT engine trên Jetson (không cần mạng, không cần pycuda) |
+| `tools/pack.py` | Đóng gói chép qua NoMachine; `--results` gói kết quả mang về |
+| `config/robot.local.yaml` | Số đo riêng trên robot, ghi đè `robot.yaml` (mẫu: `robot.local.example.yaml`) |
 | `tools/teleop.py` | Lái tay máy, ghi điểm đo |
 | `tools/capture.py` | Chụp ở tư thế quan sát, kiểm tra camera thấy bàn |
 | `tools/calibrate.py` | Hiệu chỉnh camera (chạm 6-9 quân), đo thanh trượt, kiểm tra |

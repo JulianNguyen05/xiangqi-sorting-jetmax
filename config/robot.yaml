@@ -1,4 +1,5 @@
-# Cấu hình robot JetMax. Đơn vị mm, giây.
+# Cấu hình robot JetMax - GIÁ TRỊ MẶC ĐỊNH. Đơn vị mm, giây.
+# TRÊN ROBOT KHÔNG SỬA FILE NÀY: ghi số đo vào config/robot.local.yaml (ghi đè các mục cùng tên).
 # CÁC SỐ CÓ GHI "ĐO LẠI" phải đo bằng tools/teleop.py khi có robot (xem RUNBOOK.md).
 #
 # Hệ toạ độ:
