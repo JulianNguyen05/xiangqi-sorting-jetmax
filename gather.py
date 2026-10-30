@@ -6,52 +6,52 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.resolve()
 OUTPUT_FILE = PROJECT_ROOT / "gathered_code.md"
 
-# Định nghĩa chính xác 4 nhóm file cần thu thập
+# Cấu hình 3 nhóm file cần thu thập
 GROUPS = [
     {
-        "name": "Nhóm 1: Lõi hệ thống (bắt buộc)",
+        "name": "Nhóm 1: API Robot (Quan trọng nhất)",
         "patterns": [
-            "robot/board.py",
-            "robot/vision_board.py",
-            "robot/detect_view.py",
-            "robot/engine.py",
-            "robot/game.py",
-            "robot/motion.py",
-            "robot/xiangqi_rules.py",
-            "configs/board.yaml",
-            "configs/vision.yaml",
+            "docs/robot-reference/jetmax_control/scripts/jetmax_control_main.py",
+            "docs/robot-reference/jetmax_control/msg/JetMax.msg",
+            "docs/robot-reference/jetmax_control/msg/SetJetMax.msg",
+            "docs/robot-reference/jetmax_control/msg/SetJoint.msg",
+            "docs/robot-reference/jetmax_control/msg/Sucker.msg",
+            "docs/robot-reference/jetmax_control/msg/SuckerState.msg",
+            "docs/robot-reference/waste_classification_stepper.py",
         ],
     },
     {
-        "name": "Nhóm 2: Cách bạn đang điều khiển tay và chạy mô phỏng",
+        "name": "Nhóm 2: Code cũ có thể tái sử dụng",
         "patterns": [
-            "tests/play_sim.py",
-            "tests/fake_uci_engine.py",
-            "tests/scan_detect.py",
-            "tests/move_piece.py",
+            "robot/motion.py",
+            "robot/aruco_locator.py",
+            "robot/rig.py",
             "tests/pick_place.py",
             "tests/joint_teleop.py",
         ],
     },
     {
-        "name": "Nhóm 3: Tham chiếu SDK của robot (để viết motion.py đúng API)",
+        "name": "Nhóm 3: Thông tin Model & Training",
         "patterns": [
-            "docs/robot-reference/waste_classification_stepper.py",
-            "docs/robot-reference/jetmax_control/scripts/jetmax_control_main.py",
-        ],
-    },
-    {
-        "name": "Nhóm 4: Chỉ gửi nếu tôi hỏi thêm",
-        "patterns": [
-            "tests/test_game.py",
-            "tests/test_rules.py",
-            "README.md",
+            "training/README.md",
         ],
     },
 ]
 
-# Các định dạng file trọng số / nhị phân (phòng trường hợp có file binary)
-WEIGHTS_EXTENSIONS = {".pt", ".onnx", ".engine", ".pth", ".weights", ".tflite", ".bin", ".pkl", ".nnue"}
+# Đuôi file binary/model cần bỏ qua nội dung
+WEIGHTS_EXTENSIONS = {
+    ".pt",
+    ".onnx",
+    ".engine",
+    ".pth",
+    ".weights",
+    ".tflite",
+    ".bin",
+    ".pkl",
+    ".nnue",
+    ".pdf",
+    ".docx",
+}
 
 
 def format_size(size_bytes: int) -> str:
@@ -65,21 +65,20 @@ def format_size(size_bytes: int) -> str:
 
 
 def resolve_file(rel_path_str: str) -> Path | None:
-    """Tìm file dựa trên đường dẫn tương đối từ PROJECT_ROOT."""
+    """Xử lý đường dẫn linh hoạt trên cả Windows và Linux/macOS."""
     file_path = PROJECT_ROOT / rel_path_str
     if file_path.exists() and file_path.is_file():
         return file_path
-    
-    # Tìm kiếm linh hoạt nếu đường dẫn dùng dấu xoẹt ngang/ngược trên Windows
+
     alt_path = PROJECT_ROOT / rel_path_str.replace("/", os.sep)
     if alt_path.exists() and alt_path.is_file():
         return alt_path
-        
+
     return None
 
 
 def get_language_tag(filepath: Path) -> str:
-    """Xác định ngôn ngữ để highlight code trong Markdown."""
+    """Gán ngôn ngữ syntax highlighting cho khối Markdown code block."""
     ext = filepath.suffix.lower()
     mapping = {
         ".py": "python",
@@ -97,7 +96,7 @@ def get_language_tag(filepath: Path) -> str:
 
 
 def render_notebook(filepath: Path) -> str:
-    """Trích xuất cell code và markdown từ Jupyter Notebook nếu có."""
+    """Trích xuất cell code và markdown nếu có file Jupyter Notebook."""
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             nb = json.load(f)
@@ -110,8 +109,8 @@ def render_notebook(filepath: Path) -> str:
             elif cell_type == "code":
                 output.append(f"```python\n# Cell {i} (Code)\n{source}\n```")
         return "\n\n".join(output)
-    except Exception:
-        return filepath.read_text(encoding="utf-8", errors="ignore")
+    except Exception as e:
+        return f"> ❌ Lỗi đọc notebook: {e}\n"
 
 
 def main():
@@ -126,6 +125,9 @@ def main():
             if file_path and file_path not in seen_paths:
                 seen_paths.add(file_path)
                 group_files.append(file_path)
+            elif not file_path:
+                print(f"⚠️  Không tìm thấy file: {rel_path_str}")
+
         grouped_results.append((group["name"], group_files))
         total_found += len(group_files)
 
@@ -170,9 +172,9 @@ def main():
                 out.write(f"### `{rel_path}`\n\n")
 
                 if ext in WEIGHTS_EXTENSIONS:
-                    out.write(f"- **Loại file:** Binary / Model ({ext})\n")
+                    out.write(f"- **Loại file:** Binary / Model / Unsupported ({ext})\n")
                     out.write(f"- **Kích thước file:** {size_str}\n")
-                    out.write("> ℹ️ *Nội dung nhị phân được bỏ qua.* \n\n")
+                    out.write("> ℹ️ *Nội dung nhị phân/tài liệu được bỏ qua.* \n\n")
                 elif ext == ".ipynb":
                     out.write(f"*File Jupyter Notebook | Dung lượng: {size_str}*\n\n")
                     nb_content = render_notebook(file_path)
@@ -181,9 +183,13 @@ def main():
                 else:
                     lang = get_language_tag(file_path)
                     try:
-                        content = file_path.read_text(encoding="utf-8", errors="ignore")
+                        content = file_path.read_text(
+                            encoding="utf-8", errors="ignore"
+                        )
                         line_count = len(content.splitlines())
-                        out.write(f"*Dung lượng: {size_str} | Số dòng: {line_count}*\n\n")
+                        out.write(
+                            f"*Dung lượng: {size_str} | Số dòng: {line_count}*\n\n"
+                        )
                         out.write(f"```{lang}\n")
                         out.write(content)
                         if not content.endswith("\n"):
@@ -194,7 +200,7 @@ def main():
 
                 out.write("---\n\n")
 
-    print(f"✅ Đã gom xong {total_found} file vào `gathered_code.md` theo đúng 4 nhóm chỉ định.")
+    print(f"✅ Đã gôm xong {total_found} file vào `gathered_code.md`.")
 
 
 if __name__ == "__main__":
