@@ -1,0 +1,63 @@
+# Cấu hình robot JetMax. Đơn vị mm, giây.
+# CÁC SỐ CÓ GHI "ĐO LẠI" phải đo bằng tools/teleop.py khi có robot (xem RUNBOOK.md).
+#
+# Hệ toạ độ:
+#   - ROBOT: toạ độ (x, y, z) của tay máy JetMax như /jetmax/status báo (gốc ở đế robot).
+#   - THẾ GIỚI (world): toạ độ robot khi thanh trượt ở vị trí 0. Mọi điểm trên mặt bàn được lưu trong hệ này.
+#     Khi thanh trượt ở vị trí s bước: robot = world - slider.vec * s.
+
+ros:
+  command: /jetmax/command
+  status: /jetmax/status
+  sucker: /jetmax/end_effector/sucker/command
+  image: /usb_cam/image_rect_color
+  image_is_rgb: true            # usb_cam của Hiwonder trả RGB (code cũ có đổi RGB -> BGR)
+
+limits:                         # vùng an toàn của đầu hút (hệ ROBOT). ĐO LẠI: đây là giá trị cũ, khá chặt
+  x: [-120, 120]
+  y: [-230, -100]
+  z: [-15, 225]
+  r_min: 50.0                   # bán kính xy tối thiểu (jetmax bỏ qua lệnh nếu nhỏ hơn)
+  r_max: 280.0                  # bán kính xy tối đa. ĐO LẠI
+
+speed:
+  fast: 100.0                   # mm/s di chuyển ngang
+  slow: 40.0                    # mm/s khi hạ xuống / nâng lên sát quân
+  settle: 0.3                   # s chờ thêm sau mỗi lệnh
+  tol: 5.0                      # mm sai lệch cho phép giữa đích và vị trí thực
+
+heights:
+  z_safe: 50.0                  # độ cao di chuyển ngang (quân cao 10 mm)
+  z_pick: -8.0                  # z khi đầu hút chạm MẶT TRÊN quân. tools/calibrate.py tự đo và ghi đè
+  place_gap: 1.5                # thả quân khi đáy quân còn cách mặt bàn bấy nhiêu mm (z_place = z_pick + place_gap)
+  suck_wait: 0.6                # s chờ hút bám chắc
+  release_wait: 0.8             # s chờ xả khí
+
+slider:
+  enabled: true                 # false nếu robot không gắn thanh trượt
+  min: 0
+  max: 5200
+  speed: 800.0                  # bước/s (hãng ghi 1000, để thấp cho chắc)
+  min_z: 40.0                   # chỉ trượt khi tay máy cao hơn mức này
+  vec: [0.0, 0.0]               # mm/bước trong hệ ROBOT. tools/calibrate.py --slider tự đo và ghi đè
+  step_choice: 100              # bước lượng tử khi chọn vị trí trượt
+
+# Tư thế quan sát (tay lên cao nhìn xuống). Mỗi view = vị trí tay máy + vị trí thanh trượt.
+# Nên dùng CÙNG MỘT tư thế tay, chỉ đổi thanh trượt: khi đó chỉ cần hiệu chỉnh camera 1 lần.
+# ĐO LẠI: chọn bằng tools/capture.py sao cho các view phủ hết bàn cờ + vùng chờ.
+views:
+  - name: v0
+    arm: [0.0, -160.0, 210.0]
+    slider: 0
+calib_file: config/calib.yaml   # do tools/calibrate.py sinh ra
+
+board:
+  red_near_world: [0.0, 0.0]    # phía Đỏ của bàn cờ là phía gần điểm này (mặc định: đế robot)
+  staging_margin: 12.0          # mm: quân cách viền ngoài lưới hơn mức này mới tính là ở vùng chờ
+
+detector:
+  model: models/best.onnx       # .onnx (onnxruntime / cv2.dnn) hoặc .engine (TensorRT)
+  imgsz: 640
+  conf: 0.35
+  iou: 0.5
+  tta_rotations: [0, 90, 180, 270]

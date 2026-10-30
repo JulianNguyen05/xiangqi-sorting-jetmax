@@ -1,134 +1,266 @@
 #!/usr/bin/env python3
-# Điều khiển tay máy (ROS topic) + thanh trượt (hiwonder.Stepper) + đầu hút. Tách từ tests/pick_place.py để dùng chung.
-# Cần node jetmax_control đang chạy và rospy.init_node() đã được gọi trước khi tạo Mover.
-# KHÔNG tạo hiwonder.JetMax() ở đây vì node jetmax_control đã giữ bus servo.
+# Điều khiển JetMax: tay máy (ROS topic), đầu hút, thanh trượt (hiwonder.Stepper).
+# Lớp Robot làm việc trong hệ THẾ GIỚI (world = hệ robot khi thanh trượt ở 0) và tự chọn vị trí thanh trượt.
+# Hai backend: RosBackend (robot thật, cần node jetmax_control đang chạy) và FakeBackend (laptop, chỉ in ra).
+# Tương thích Python 3.6. KHÔNG tạo hiwonder.JetMax() vì node jetmax_control đã giữ bus servo.
 
-import math, time
-import rospy
-from std_msgs.msg import Bool
-from jetmax_control.msg import SetJetMax, JetMax
-
-X_LIM, Y_LIM, Z_LIM, R_MIN = (-120, 120), (-230, -100), (-12, 225), 50.0   # giống các script trước
-TOL = 5.0                       # mm, sai lệch cho phép giữa đích và vị trí thực
-FAST, SLOW = 100.0, 40.0        # mm/giây: di chuyển bình thường / khi hạ xuống chạm quân cờ
-SLIDER_MIN, SLIDER_MAX = 0, 5200
-SLIDER_SPEED = 800.0            # bước/giây, dùng ước lượng thời gian chờ (hãng ghi 1000; để thấp cho chắc)
-SLIDER_MIN_Z = 40.0             # chỉ trượt khi tay máy nâng đủ cao
+import math
+import time
 
 
-def in_limits(p):
-    x, y, z = p
-    return (X_LIM[0] <= x <= X_LIM[1] and Y_LIM[0] <= y <= Y_LIM[1] and Z_LIM[0] <= z <= Z_LIM[1]
-            and (x * x + y * y) ** 0.5 >= R_MIN)
+class MoveError(RuntimeError):
+    pass
 
 
-class Mover:
-    def __init__(self, use_slider=True):
-        self.cmd = rospy.Publisher('/jetmax/command', SetJetMax, queue_size=1)
-        self.sucker = rospy.Publisher('/jetmax/end_effector/sucker/command', Bool, queue_size=1)
-        self.stepper, self.pos, self.enabled = None, 0, False
+# ----------------------------------------------------------------------------------------- backends
+class RosBackend(object):
+    def __init__(self, cfg, use_slider):
+        import rospy
+        from std_msgs.msg import Bool
+        from jetmax_control.msg import SetJetMax, JetMax
+        self.rospy, self.Bool, self.SetJetMax, self.JetMax = rospy, Bool, SetJetMax, JetMax
+        r = cfg['ros']
+        self.status_topic = r['status']
+        self.cmd = rospy.Publisher(r['command'], SetJetMax, queue_size=1)
+        self.suck = rospy.Publisher(r['sucker'], Bool, queue_size=1)
+        self.stepper = None
         if use_slider:
             import hiwonder
             self.stepper = hiwonder.Stepper(1)
         rospy.sleep(1.0)
-        self.start = self.status()
-        self.sucker.publish(Bool(data=False))
 
-    # ---------------------------------------------------------------- tay máy
     def status(self):
-        m = rospy.wait_for_message('/jetmax/status', JetMax, timeout=5)
+        m = self.rospy.wait_for_message(self.status_topic, self.JetMax, timeout=5)
         return m.x, m.y, m.z
 
-    def goto(self, p, speed=FAST):
-        if not in_limits(p):
-            raise ValueError('Điểm (%.1f, %.1f, %.1f) ngoài giới hạn an toàn' % tuple(p))
-        cur = self.status()
-        dist = math.sqrt(sum((p[i] - cur[i]) ** 2 for i in range(3)))
-        t = max(0.5, dist / speed)
-        self.cmd.publish(SetJetMax(x=p[0], y=p[1], z=p[2], duration=t))
-        rospy.sleep(t + 0.3)
-        now = self.status()
-        err = max(abs(now[i] - p[i]) for i in range(3))
-        if err > TOL:
-            raise RuntimeError('Tay máy chưa tới đích (lệch %.1f mm): lệnh có thể bị chặn bởi giới hạn' % err)
+    def move(self, p, duration):
+        self.cmd.publish(self.SetJetMax(x=p[0], y=p[1], z=p[2], duration=duration))
 
-    # --------------------------------------------------------------- thanh trượt
-    def home_slider(self):
-        if self.stepper is None:
-            return
-        if self.status()[2] < SLIDER_MIN_Z:
-            raise RuntimeError('Tay máy đang thấp hơn z=%d, hãy nâng lên trước' % SLIDER_MIN_Z)
+    def sleep(self, t):
+        self.rospy.sleep(t)
+
+    def sucker(self, on):
+        self.suck.publish(self.Bool(data=bool(on)))
+
+    def slider_home(self):
         st = self.stepper
-        st.go_home(True)                         # chặn cho tới khi về home, không có timeout, canh nút nguồn
+        st.go_home(True)                    # chặn tới khi về home, không timeout
         st.set_mode(st.EN)
         st.set_div(st.DIV_1_4)
-        self.pos, self.enabled = 0, False
+
+    def slider_enable(self):
+        self.stepper.set_mode(self.stepper.SLEEP)
+
+    def slider_disable(self):
+        self.stepper.set_mode(self.stepper.EN)
+
+    def slider_step(self, d):
+        self.stepper.goto(int(d))           # bước TƯƠNG ĐỐI
+
+
+class FakeBackend(object):
+    """Giả lập để chạy thử trên laptop: in lệnh, không chờ thật (trừ khi realtime=True)."""
+
+    def __init__(self, cfg, use_slider, start=(0.0, -160.0, 150.0), log=print, realtime=False):
+        self.p = tuple(start)
+        self.log = log
+        self.realtime = realtime
+        self.stepper = object() if use_slider else None
+        self.suck_on = False
+        self.trace = []                     # lịch sử (loại, dữ liệu) để kiểm tra
+
+    def status(self):
+        return self.p
+
+    def move(self, p, duration):
+        self.trace.append(('move', tuple(p)))
+        self.p = tuple(p)
+
+    def sleep(self, t):
+        if self.realtime:
+            time.sleep(t)
+
+    def sucker(self, on):
+        self.trace.append(('suck', bool(on)))
+        self.suck_on = bool(on)
+
+    def slider_home(self):
+        self.trace.append(('slider_home', 0))
+
+    def slider_enable(self):
+        pass
+
+    def slider_disable(self):
+        pass
+
+    def slider_step(self, d):
+        self.trace.append(('slider_step', int(d)))
+
+
+# ------------------------------------------------------------------------------------------- Robot
+class Robot(object):
+    def __init__(self, cfg, calib=None, backend='ros', log=print, **kw):
+        self.cfg, self.log = cfg, log
+        sl = cfg['slider']
+        self.use_slider = bool(sl.get('enabled', False))
+        self.b = RosBackend(cfg, self.use_slider) if backend == 'ros' else FakeBackend(cfg, self.use_slider, log=log, **kw)
+        lim = cfg['limits']
+        self.xl, self.yl, self.zl = lim['x'], lim['y'], lim['z']
+        self.r_min, self.r_max = float(lim['r_min']), float(lim.get('r_max', 1e9))
+        sp = cfg['speed']
+        self.fast, self.slow, self.settle, self.tol = sp['fast'], sp['slow'], sp['settle'], sp['tol']
+        h = cfg['heights']
+        self.z_safe = float(h['z_safe'])
+        self.z_pick = float((calib or {}).get('z_pick', h['z_pick']))
+        self.z_place = self.z_pick + float(h['place_gap'])
+        self.suck_wait, self.release_wait = float(h['suck_wait']), float(h['release_wait'])
+        self.s_min, self.s_max = int(sl['min']), int(sl['max'])
+        self.s_speed, self.s_min_z = float(sl['speed']), float(sl['min_z'])
+        self.s_step = int(sl.get('step_choice', 100))
+        vec = (calib or {}).get('slider_vec', sl.get('vec', [0.0, 0.0]))
+        self.vec = (float(vec[0]), float(vec[1]))
+        if self.use_slider and abs(self.vec[0]) + abs(self.vec[1]) < 1e-6:
+            self.log('CẢNH BÁO: chưa đo slider_vec (mm/bước): coi như thanh trượt không làm dịch toạ độ. '
+                     'Chạy tools/calibrate.py --slider trước khi gắp thật.')
+        self.s = 0
+        self.s_enabled = False
+        self.start = self.b.status()
+        self.b.sucker(False)
+
+    # ------------------------------------------------------------------ giới hạn & quy đổi
+    def in_limits(self, p, margin=0.0):
+        x, y, z = p
+        r = math.hypot(x, y)
+        return (self.xl[0] + margin <= x <= self.xl[1] - margin and self.yl[0] + margin <= y <= self.yl[1] - margin
+                and self.zl[0] <= z <= self.zl[1] and self.r_min + margin <= r <= self.r_max - margin)
+
+    def to_robot(self, wx, wy, s=None):
+        s = self.s if s is None else s
+        return wx - self.vec[0] * s, wy - self.vec[1] * s
+
+    def to_world(self, rx, ry, s=None):
+        s = self.s if s is None else s
+        return rx + self.vec[0] * s, ry + self.vec[1] * s
+
+    def choose_slider(self, wx, wy, margin=5.0):
+        """Vị trí thanh trượt gần vị trí hiện tại nhất mà điểm (wx, wy) nằm trong vùng với ở cả z_safe và z_pick."""
+        cands = [self.s] if not self.use_slider else \
+            sorted(range(self.s_min, self.s_max + 1, self.s_step), key=lambda s: abs(s - self.s))
+        for s in cands:
+            rx, ry = self.to_robot(wx, wy, s)
+            if self.in_limits((rx, ry, self.z_safe), margin) and self.in_limits((rx, ry, self.z_pick), margin):
+                return s
+        return None
+
+    def reachable(self, wx, wy):
+        return self.choose_slider(wx, wy) is not None
+
+    # ----------------------------------------------------------------------- cấp thấp
+    def status(self):
+        return self.b.status()
+
+    def goto(self, p, speed=None):
+        p = tuple(float(v) for v in p)
+        if not self.in_limits(p):
+            raise MoveError('Điểm robot (%.1f, %.1f, %.1f) ngoài giới hạn an toàn' % p)
+        cur = self.b.status()
+        dist = math.sqrt(sum((p[i] - cur[i]) ** 2 for i in range(3)))
+        t = max(0.4, dist / (speed or self.fast))
+        self.b.move(p, t)
+        self.b.sleep(t + self.settle)
+        now = self.b.status()
+        err = max(abs(now[i] - p[i]) for i in range(3))
+        if err > self.tol:
+            raise MoveError('Tay máy chưa tới đích (lệch %.1f mm), có thể bị chặn bởi giới hạn động học' % err)
+
+    def lift(self, z=None):
+        z = self.z_safe if z is None else z
+        x, y, cz = self.b.status()
+        if cz < z - 1:
+            self.goto((x, y, z), self.slow)
+
+    def home_slider(self):
+        if not self.use_slider:
+            return
+        if self.b.status()[2] < self.s_min_z:
+            raise MoveError('Tay máy đang thấp hơn z=%d, hãy nâng lên trước khi về HOME' % self.s_min_z)
+        self.b.slider_home()
+        self.s, self.s_enabled = 0, False
 
     def slide_to(self, target):
-        if self.stepper is None:
+        if not self.use_slider:
             return
-        target = int(max(SLIDER_MIN, min(SLIDER_MAX, target)))
-        d = target - self.pos
+        target = int(max(self.s_min, min(self.s_max, target)))
+        d = target - self.s
         if d == 0:
             return
-        if self.status()[2] < SLIDER_MIN_Z:
-            raise RuntimeError('Tay máy đang thấp hơn z=%d, không trượt' % SLIDER_MIN_Z)
-        if not self.enabled:
-            self.stepper.set_mode(self.stepper.SLEEP)   # chỉ gửi một lần
-            self.enabled = True
-        print('  thanh trượt %d -> %d' % (self.pos, target))
-        self.stepper.goto(d)                     # bước TƯƠNG ĐỐI
-        time.sleep(abs(d) / SLIDER_SPEED + 0.3)
-        self.pos = target
+        self.lift(max(self.z_safe, self.s_min_z))
+        if not self.s_enabled:
+            self.b.slider_enable()
+            self.s_enabled = True
+        self.b.slider_step(d)
+        self.b.sleep(abs(d) / self.s_speed + 0.3)
+        self.s = target
 
-    # ------------------------------------------------------------ thao tác cấp cao
-    # sq_pos = (slider, x, y) lấy từ Board.position()
-    def hover(self, sq_pos, zsafe):
-        s, x, y = sq_pos
-        self.slide_to(s)
-        self.goto((x, y, zsafe))
+    # --------------------------------------------------------------------- cấp cao (hệ thế giới)
+    def move_above(self, wx, wy):
+        s = self.choose_slider(wx, wy)
+        if s is None:
+            raise MoveError('Điểm (%.1f, %.1f) ngoài tầm với (kể cả khi trượt)' % (wx, wy))
+        if s != self.s:
+            self.slide_to(s)
+        rx, ry = self.to_robot(wx, wy)
+        self.lift()
+        self.goto((rx, ry, self.z_safe))
+        return rx, ry
 
-    def pick(self, sq_pos, zpick, zsafe):
-        self.hover(sq_pos, zsafe)
-        _, x, y = sq_pos
-        self.sucker.publish(Bool(data=True))
-        rospy.sleep(0.3)
-        self.goto((x, y, zpick), SLOW)
-        rospy.sleep(0.8)                         # chờ hút bám chắc
-        self.goto((x, y, zsafe), SLOW)
+    def pick(self, wx, wy):
+        rx, ry = self.move_above(wx, wy)
+        self.b.sucker(True)
+        self.b.sleep(0.2)
+        self.goto((rx, ry, self.z_pick), self.slow)
+        self.b.sleep(self.suck_wait)
+        self.goto((rx, ry, self.z_safe), self.slow)
 
-    def place(self, sq_pos, zplace, zsafe):
-        self.hover(sq_pos, zsafe)
-        _, x, y = sq_pos
-        self.goto((x, y, zplace), SLOW)
-        self.sucker.publish(Bool(data=False))    # thả, mở van xả khí
-        rospy.sleep(1.0)
-        self.goto((x, y, zsafe), SLOW)
+    def place(self, wx, wy):
+        rx, ry = self.move_above(wx, wy)
+        self.goto((rx, ry, self.z_place), self.slow)
+        self.b.sucker(False)
+        self.b.sleep(self.release_wait)
+        self.goto((rx, ry, self.z_safe), self.slow)
 
-    # ------------------------------------------------------------------ an toàn
-    def safe_stop(self, zsafe):
-        """Tắt hút và nâng tay máy lên z an toàn (dùng khi có lỗi giữa chừng)."""
-        self.sucker.publish(Bool(data=False))
+    def hover_check(self, wx, wy, dz=15.0):
+        """Chỉ bay tới trên điểm, hạ xuống cách mặt quân dz mm rồi nâng lên (để kiểm tra bằng mắt, không hút)."""
+        rx, ry = self.move_above(wx, wy)
+        self.goto((rx, ry, self.z_pick + dz), self.slow)
+        self.b.sleep(0.5)
+        self.goto((rx, ry, self.z_safe), self.slow)
+
+    def observe(self, view):
+        """Đưa camera tới tư thế quan sát: nâng lên, trượt, rồi tới vị trí tay."""
+        self.lift(max(self.z_safe, self.s_min_z))
+        self.slide_to(int(view.get('slider', 0)))
+        self.goto(tuple(view['arm']))
+        self.b.sleep(0.4)
+
+    def safe_stop(self):
+        self.b.sucker(False)
         try:
-            cur = self.status()
-            if cur[2] < zsafe:
-                self.cmd.publish(SetJetMax(x=cur[0], y=cur[1], z=zsafe, duration=1.0))
-                rospy.sleep(1.4)
+            x, y, z = self.b.status()
+            if z < self.z_safe:
+                self.b.move((x, y, self.z_safe), 1.0)
+                self.b.sleep(1.4)
         except Exception as e:
-            print('Không nâng được tay máy (%s), hãy kiểm tra thủ công' % e)
+            self.log('Không nâng được tay máy (%s), kiểm tra thủ công' % e)
 
-    def restore(self, zsafe=50.0):
-        """Về trạng thái ban đầu: tắt hút, nâng lên, thanh trượt về 0, tay máy về vị trí lúc bắt đầu."""
-        self.sucker.publish(Bool(data=False))
-        rospy.sleep(0.6)
+    def park(self):
+        """Về vị trí lúc bắt đầu, thanh trượt về 0."""
+        self.b.sucker(False)
         try:
-            if self.stepper is not None and self.pos != 0:
-                self.safe_stop(max(zsafe, SLIDER_MIN_Z))
-                self.slide_to(0)
-            self.cmd.publish(SetJetMax(x=self.start[0], y=self.start[1], z=self.start[2], duration=2.0))
-            rospy.sleep(2.5)
+            self.lift(max(self.z_safe, self.s_min_z))
+            self.slide_to(0)
+            self.goto(self.start)
         except Exception as e:
-            print('Không tự về được vị trí ban đầu (%s), hãy kiểm tra thủ công' % e)
-        if self.stepper is not None:
-            self.stepper.set_mode(self.stepper.EN)
-        print('Đã về vị trí ban đầu')
+            self.log('Không tự về được vị trí ban đầu (%s), kiểm tra thủ công' % e)
+        if self.use_slider and self.b.stepper is not None:
+            self.b.slider_disable()
