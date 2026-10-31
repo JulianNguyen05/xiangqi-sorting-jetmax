@@ -48,6 +48,7 @@ class Jogger(object):
         old = termios.tcgetattr(fd)
         try:
             tty.setcbreak(fd)
+            termios.tcflush(fd, termios.TCIFLUSH)              # bỏ phím Enter bấm dồn từ trước
             while True:
                 if not select.select([sys.stdin], [], [], 0.1)[0]:
                     continue

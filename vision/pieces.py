@@ -76,39 +76,100 @@ class CvDnnBackend(object):
         return self.net.forward()
 
 
+class _CudaRT(object):
+    """Gọi thẳng libcudart (có sẵn trong JetPack) qua ctypes: KHÔNG cần pycuda, vì robot không có mạng để cài."""
+    H2D, D2H = 1, 2
+
+    def __init__(self):
+        import ctypes
+        import ctypes.util
+        self.ct = ctypes
+        names = ['libcudart.so', ctypes.util.find_library('cudart'), '/usr/local/cuda/lib64/libcudart.so']
+        names += ['/usr/local/cuda/lib64/libcudart.so.%s' % v for v in ('10.2', '11.4', '10.0', '12')]
+        self.lib, errs = None, []
+        for n in names:
+            if not n:
+                continue
+            try:
+                self.lib = ctypes.CDLL(n)
+                break
+            except OSError as e:
+                errs.append(str(e))
+        if self.lib is None:
+            raise RuntimeError('Không nạp được libcudart: ' + '; '.join(errs))
+        self.lib.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_size_t]
+        self.lib.cudaMemcpy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        self.lib.cudaFree.argtypes = [ctypes.c_void_p]
+
+    def _ok(self, err, what):
+        if err != 0:
+            raise RuntimeError('CUDA %s lỗi mã %d' % (what, err))
+
+    def malloc(self, nbytes):
+        p = self.ct.c_void_p()
+        self._ok(self.lib.cudaMalloc(self.ct.byref(p), nbytes), 'cudaMalloc')
+        return p.value
+
+    def h2d(self, dptr, arr):
+        self._ok(self.lib.cudaMemcpy(dptr, arr.ctypes.data, arr.nbytes, self.H2D), 'memcpy H2D')
+
+    def d2h(self, arr, dptr):
+        self._ok(self.lib.cudaMemcpy(arr.ctypes.data, dptr, arr.nbytes, self.D2H), 'memcpy D2H')
+
+
 class TrtBackend(object):
-    """TensorRT engine (build trên chính Jetson: trtexec --onnx=best.onnx --saveEngine=best.engine --fp16)."""
+    """TensorRT engine (build trên chính Jetson: trtexec --onnx=best.onnx --saveEngine=best.engine --fp16).
+    Dùng pycuda nếu có, không thì gọi libcudart trực tiếp."""
 
     def __init__(self, path):
         import tensorrt as trt
-        import pycuda.driver as cuda
-        import pycuda.autoinit  # noqa: F401
-        self.cuda = cuda
         logger = trt.Logger(trt.Logger.WARNING)
-        with open(path, 'rb') as f, trt.Runtime(logger) as rt:
+        with open(path, 'rb') as f:
+            rt = trt.Runtime(logger)
             self.engine = rt.deserialize_cuda_engine(f.read())
+        if self.engine is None:
+            raise RuntimeError('Không đọc được engine (build trên máy khác / phiên bản TensorRT khác?)')
         self.ctx = self.engine.create_execution_context()
-        self.bufs, self.host, self.dev, self.shapes = [], [], [], []
+        self.cuda = _CudaRT()
+        self.host, self.dev, self.shapes = [], [], []
         for i in range(self.engine.num_bindings):
             shape = tuple(self.engine.get_binding_shape(i))
             dtype = trt.nptype(self.engine.get_binding_dtype(i))
-            h = cuda.pagelocked_empty(int(np.prod(shape)), dtype)
-            d = cuda.mem_alloc(h.nbytes)
+            h = np.zeros(int(np.prod(shape)), dtype)
             self.host.append(h)
-            self.dev.append(d)
+            self.dev.append(self.cuda.malloc(h.nbytes))
             self.shapes.append(shape)
-            self.bufs.append(int(d))
-        self.stream = cuda.Stream()
-        self.name = 'tensorrt'
+        self.inp = [i for i in range(self.engine.num_bindings) if self.engine.binding_is_input(i)][0]
+        self.out = [i for i in range(self.engine.num_bindings) if not self.engine.binding_is_input(i)][0]
+        self.name = 'tensorrt (ctypes cudart)'
 
     def __call__(self, blob):
-        cuda = self.cuda
-        np.copyto(self.host[0], blob.ravel())
-        cuda.memcpy_htod_async(self.dev[0], self.host[0], self.stream)
-        self.ctx.execute_async_v2(self.bufs, self.stream.handle)
-        cuda.memcpy_dtoh_async(self.host[1], self.dev[1], self.stream)
-        self.stream.synchronize()
-        return self.host[1].reshape(self.shapes[1]).copy()
+        h = self.host[self.inp]
+        np.copyto(h, blob.ravel().astype(h.dtype))
+        self.cuda.h2d(self.dev[self.inp], h)
+        if not self.ctx.execute_v2([int(d) for d in self.dev]):
+            raise RuntimeError('TensorRT execute_v2 thất bại')
+        o = self.host[self.out]
+        self.cuda.d2h(o, self.dev[self.out])
+        return o.reshape(self.shapes[self.out]).astype(np.float32)
+
+
+def file_md5(path):
+    import hashlib
+    h = hashlib.md5()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1 << 20), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def engine_matches(onnx_path, eng_path):
+    """tools/build_engine.py ghi md5 của file onnx vào <engine>.src. Không có file .src thì coi như khớp."""
+    src = eng_path + '.src'
+    if not os.path.exists(src):
+        return True
+    with open(src) as f:
+        return f.read().strip() == file_md5(onnx_path)
 
 
 def load_backend(path):
@@ -118,12 +179,23 @@ def load_backend(path):
     if path.endswith('.engine') or path.endswith('.trt'):
         return TrtBackend(path)
     errs = []
+    eng = os.path.splitext(path)[0] + '.engine'
+    if os.path.exists(eng) and not engine_matches(path, eng):
+        print('CẢNH BÁO: %s được build từ model KHÁC %s -> bỏ qua, chạy lại tools/build_engine.py' % (eng, path))
+    elif os.path.exists(eng):                  # có engine cạnh file onnx -> ưu tiên (nhanh nhất trên Jetson)
+        try:
+            return TrtBackend(eng)
+        except Exception as e:
+            errs.append('TrtBackend(%s): %s' % (eng, e))
     for B in (OrtBackend, CvDnnBackend):
         try:
-            return B(path)
-        except Exception as e:                 # thiếu thư viện / OpenCV cũ không đọc được ONNX
-            errs.append('%s: %s' % (B.__name__, e))
-    raise RuntimeError('Không nạp được model:\n  ' + '\n  '.join(errs))
+            b = B(path)
+            b(np.zeros((1, 3, 640, 640), np.float32))      # chạy thử: OpenCV cũ nạp được nhưng chạy YOLO11 thì lỗi
+            return b
+        except Exception as e:                 # thiếu thư viện / OpenCV cũ không chạy được YOLO11
+            errs.append('%s: %s' % (B.__name__, str(e).strip().splitlines()[-1][:160]))
+    raise RuntimeError('Không nạp được model:\n  ' + '\n  '.join(errs) +
+                       '\n  -> Trên Jetson: build engine bằng trtexec (RUNBOOK mục 2c)')
 
 
 # --------------------------------------------------------------------------------------- YOLO
