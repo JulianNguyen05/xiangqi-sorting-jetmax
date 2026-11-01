@@ -1,0 +1,2 @@
+git: https://github.com/JulianNguyen05/xiangqi-sorting-jetmax
+notebook: https://github.com/JulianNguyen05/xiangqi-sorting-jetmax/tree/main/training
