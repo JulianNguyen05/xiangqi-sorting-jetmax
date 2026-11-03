@@ -62,3 +62,18 @@ detector:
   conf: 0.35
   iou: 0.5
   tta_rotations: [0, 90, 180, 270]
+
+brain:                          # thư viện ảnh -> nước đi (brain/xiangqi_brain.py). Ghi đè trong robot.local.yaml
+  model: models/best.onnx       # tự dùng models/best.engine nếu đã build (install.sh)
+  conf: 0.25                    # ngưỡng tốt nhất đo ở Bước 4 (board_to_fen.ipynb, mục 9)
+  iou: 0.5
+  rotations: [0]                # 1 lần chạy YOLO (Bước 2: mô hình không giảm độ chính xác khi quân xoay)
+  locate: auto                  # board (bàn của đề tài) -> lattice (bàn bất kỳ) nếu không thấy bàn
+  red_hint: null                # [x, y] điểm ảnh gần phía Đỏ; null = cạnh dưới ảnh
+  engine: [engine/pikafish, ~/pikafish/pikafish]   # thử lần lượt; không có thì dùng engine Python
+  depth: 8                      # chọn lại sau khi chạy tools/bench_engine.py trên robot
+  movetime_ms: null             # đặt số (vd. 2000) để tính theo thời gian thay vì độ sâu
+  threads: 2
+  hash_mb: 64
+  robot_side: b                 # robot cầm Đen, người đi trước
+  max_cost: 2                   # số ô nhận diện sai tối đa còn tự sửa

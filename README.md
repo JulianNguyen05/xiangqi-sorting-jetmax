@@ -28,8 +28,12 @@ tư thế quan sát (1 hay nhiều view, có thể trượt)
 | `vision/board_detect.py` | Định vị bàn không cần marker (Hough → ghép mẫu lưới → dò từng đường) |
 | `vision/pieces.py` | YOLO11 (onnxruntime / cv2.dnn / TensorRT), xoay 4 góc, màu, tâm quân |
 | `vision/world.py` | Ảnh → thế giới, ghép nhiều view, phân vùng chờ / trên bàn |
+| `vision/lattice.py` | Ảnh → thế cờ không cần biết kiểu bàn: khớp lưới 9 × 10 từ tâm quân, chốt hướng bằng luật cờ (tập test; dự phòng trên robot) |
 | `vision/calib_math.py` | Tính hiệu chỉnh camera, vector thanh trượt |
 | `planner/assign.py` | Hungarian, sửa nhãn theo số lượng quân, kế hoạch và thứ tự đặt |
+| `board/rules.py` | Luật cờ: nước đi hợp lệ, perft, kiểm tra thế cờ, suy ra nước vừa đi (sửa lỗi nhận diện), ký hiệu tiếng Việt |
+| `brain/xiangqi_brain.py` | **Thư viện chính: ảnh (+ thế trước) → nước đi tiếp theo** (`XiangqiBrain.analyze()` / `step()`) |
+| `brain/uci.py`, `brain/simple.py`, `brain/game.py` | Điều khiển Pikafish qua UCI; engine dự phòng Python; `GameTracker` cho ván người – robot |
 | `robot/motion.py` | Tay máy + hút + thanh trượt trong hệ thế giới; backend giả lập cho laptop |
 | `robot/camera.py`, `robot/jog.py`, `robot/config.py` | Camera ROS / ảnh file; lái bằng phím; đọc config |
 | `tools/check_env.py` | Kiểm tra môi trường robot + thử model |
@@ -40,7 +44,12 @@ tư thế quan sát (1 hay nhiều view, có thể trượt)
 | `tools/capture.py` | Chụp ở tư thế quan sát, kiểm tra camera thấy bàn |
 | `tools/calibrate.py` | Hiệu chỉnh camera (chạm 6-9 quân), đo thanh trượt, kiểm tra |
 | `tools/test_board_photo.py` | Thử định vị bàn trên ảnh |
-| `training/` | Notebook dựng dataset và train YOLO11n |
+| `install.sh` | Cài đặt trên robot sau khi chép gói: build `best.engine`, kiểm tra Pikafish, tự kiểm tra |
+| `tools/brain_demo.py` | Chạy thử thư viện trên ảnh hoặc camera robot |
+| `tools/build_pikafish.sh` | Build Pikafish cho Jetson (aarch64, link tĩnh) trên máy có mạng |
+| `tools/bench_engine.py` | Đo tốc độ engine trên robot |
+| `tests/test_rules.py`, `tests/test_brain.py` | Tự kiểm tra luật cờ + engine; thư viện `XiangqiBrain` trên ảnh mẫu |
+| `training/` | Notebook dựng dataset, train YOLO11n, đưa lên robot, luật cờ + engine |
 
 ## Thử trên laptop (không cần robot)
 

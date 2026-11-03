@@ -51,6 +51,19 @@ g = GameTracker(robot_side=R.BLACK)
 check('GameTracker: người đi', g.observe(truth)['status'] == 'moved')
 check('GameTracker: chưa đi', g.observe(truth)['status'] == 'no_change')
 
+print('== Khớp lưới từ tâm quân (vision/lattice.py)')
+try:
+    import numpy as np
+    from vision import lattice as L
+    sq = sorted(b)
+    th = 0.4
+    rot = np.array([[np.cos(th), -np.sin(th)], [np.sin(th), np.cos(th)]])
+    pts = (np.array([[f - 4, -(r - 4.5)] for f, r in sq], float) * 40) @ rot.T + 300
+    got, fit, pl = L.image_to_board(pts, [b[k] for k in sq], [1.0] * len(sq))
+    check('thế khai cuộc xoay 23°: khôi phục đúng FEN', got == b)
+except ImportError as e:
+    print('  (bỏ qua: thiếu %s)' % e)
+
 print('== Engine dự phòng (Python)')
 res = SimpleEngine().best_move(g.fen, depth=2)
 check('ra nước hợp lệ', res.move is not None and R.uci_to_move(res.move) in R.legal_moves(g.board, g.side),

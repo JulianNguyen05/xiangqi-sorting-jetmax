@@ -25,9 +25,10 @@ Làm **đúng thứ tự**; mỗi bước có tiêu chí "xong khi". Lỗi thì 
 3. Mở Terminal trên robot (trong NoMachine):
    ```bash
    cd ~ && python3 -m zipfile -e ~/Desktop/xiangqi_to_robot.zip ~/
-   cd ~/xiangqi
-   cp config/robot.local.example.yaml config/robot.local.yaml     # CHỈ lần đầu
+   cd ~/xiangqi && sh install.sh
    ```
+   `install.sh` tự tạo `config/robot.local.yaml` (lần đầu), kiểm tra Pikafish, build `models/best.engine` nếu chưa có
+   (lần đầu ~15 phút, xem 2c) và chạy tự kiểm tra. Gói tạo bởi `training/package.ipynb` (Bước 6) hoặc `python tools/pack.py`.
    Không cần lệnh `unzip`. Python tự giải nén vào `~/xiangqi`.
 
 **Quy tắc:** trên robot **chỉ sửa `config/robot.local.yaml`**, không sửa `config/robot.yaml`. Mỗi khi chép code mới từ laptop sang (lặp lại bước 1.2–1.3, bỏ lệnh `cp`), các file `robot.local.yaml`, `calib.yaml`, `best.engine` trên robot **được giữ nguyên**.
