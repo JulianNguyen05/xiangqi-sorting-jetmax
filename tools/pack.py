@@ -18,7 +18,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 TOP = 'xiangqi'                                        # tên thư mục khi giải nén trên robot
 
 # CHỈ đóng gói những gì robot cần (danh sách trắng), không duyệt cả repo (.venv, dataset, run Colab... rất nặng)
-CODE = ['main.py', 'README.md', 'RUNBOOK.md', 'install.sh', 'board', 'brain', 'config', 'planner', 'robot', 'tests',
+CODE = ['main.py', 'README.md', 'RUNBOOK.md', 'API.md', 'install.sh', 'board', 'brain', 'config', 'planner', 'robot', 'tests',
         'tools', 'vision', 'samples/board_empty.jpg', 'samples/start_position.jpg', 'models/README.txt']
 # Engine cờ tướng build sẵn cho Jetson (tools/build_pikafish.sh jetson) -> trong gói nằm ở engine/
 ENGINE_DIR = os.path.join('dist', 'pikafish_jetson')

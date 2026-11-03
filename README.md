@@ -4,6 +4,8 @@ Robot JetMax nhìn bàn cờ và **vùng chờ** (quân rải cạnh bàn), nh�
 
 **Ngày đầu có robot: làm theo [RUNBOOK.md](RUNBOOK.md).**
 
+**Dùng thư viện ảnh → nước đi (`XiangqiBrain`): xem [API.md](API.md).**
+
 ## Luồng xử lý
 
 ```
