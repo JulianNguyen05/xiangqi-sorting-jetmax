@@ -60,8 +60,12 @@ def _basis_candidates(pts, k=8, n_peaks=6):
     np.fill_diagonal(dist, np.inf)
     nn = np.argsort(dist, axis=1)[:, :min(k, len(pts) - 1)]
     vec = np.concatenate([d[i, nn[i]] for i in range(len(pts))])
-    ang = np.degrees(np.arctan2(vec[:, 1], vec[:, 0])) % 180.0
     ln = np.linalg.norm(vec, axis=1)
+    keep = ln > 0.25 * np.median(dist[np.arange(len(pts)), nn[:, 0]])  # bỏ 2 box gần trùng nhau (nhãn/dự đoán lặp)
+    vec, ln = vec[keep], ln[keep]
+    if len(vec) < 6:
+        return []
+    ang = np.degrees(np.arctan2(vec[:, 1], vec[:, 0])) % 180.0
     hist = np.zeros(180)
     for a, wi in zip(ang, 1.0 / np.maximum(ln, 1e-6)):    # vectơ ngắn (ô kề nhau) đáng tin hơn
         hist[int(a) % 180] += wi
@@ -131,20 +135,22 @@ def _fit_from(pts, A):
 
 
 def _best_window(idx, ok):
-    """Khung 9 x 10 (hoặc 10 x 9) chứa được nhiều điểm nhất -> mặt nạ các điểm nằm trong khung."""
-    pts = idx[ok]
-    best, best_mask = -1, np.zeros(len(idx), bool)
-    if len(pts) == 0:
-        return best_mask
+    """Khung 9 x 10 (hoặc 10 x 9) chứa được nhiều điểm nhất -> mặt nạ các điểm nằm trong khung.
+    Khung tối ưu luôn dịch được tới khi cạnh trái / cạnh dưới chạm một điểm, nên chỉ cần thử các
+    khung có góc tại toạ độ của các điểm (đếm bằng 1 phép nhân ma trận, rất nhanh)."""
+    mask = np.zeros(len(idx), bool)
+    if not ok.any():
+        return mask
+    xs, ys = np.unique(idx[ok, 0]), np.unique(idx[ok, 1])
+    best = -1
     for w, h in ((NF, NR), (NR, NF)):
-        for x0 in range(pts[:, 0].min() - w + 1, pts[:, 0].max() + 1):
-            inx = (idx[:, 0] >= x0) & (idx[:, 0] < x0 + w)
-            for y0 in range(pts[:, 1].min() - h + 1, pts[:, 1].max() + 1):
-                m = ok & inx & (idx[:, 1] >= y0) & (idx[:, 1] < y0 + h)
-                n = int(m.sum())
-                if n > best:
-                    best, best_mask = n, m
-    return best_mask
+        inx = (idx[None, :, 0] >= xs[:, None]) & (idx[None, :, 0] < xs[:, None] + w) & ok[None, :]
+        iny = (idx[None, :, 1] >= ys[:, None]) & (idx[None, :, 1] < ys[:, None] + h)
+        cnt = inx.astype(np.int32) @ iny.astype(np.int32).T          # (số x0, số y0)
+        i, j = np.unravel_index(int(np.argmax(cnt)), cnt.shape)
+        if cnt[i, j] > best:
+            best, mask = int(cnt[i, j]), inx[i] & iny[j]
+    return mask
 
 
 def fit_lattice(pts, tol=0.3, min_pts=6, return_all=False):
@@ -170,14 +176,15 @@ def fit_lattice(pts, tol=0.3, min_pts=6, return_all=False):
         idx = np.round(q).astype(int)
         resid = np.linalg.norm(q - idx, axis=1)
         inl = (resid < tol) & _best_window(idx, resid < tol)   # quân nằm ngoài khung 9 x 10 = để ngoài bàn
-        if inl.sum() < min_pts:
+        # Điểm số = số GIAO ĐIỂM khác nhau có quân: lưới sai (ô quá to) dồn nhiều quân vào 1 giao điểm nên
+        # bị thiệt; còn 2 box trùng nhau trên cùng 1 quân (nhãn / dự đoán lặp) thì không làm hỏng lưới đúng.
+        n_uniq = len({tuple(x) for x in idx[inl]})
+        if n_uniq < min_pts:
             continue
-        if len({tuple(x) for x in idx[inl]}) < inl.sum():
-            continue                                      # 2 quân trùng 1 giao điểm -> lưới sai
         c = _apply(H, np.array([[0, 0], [1, 0], [0, 1]], np.float64))
         e1, e2 = c[1] - c[0], c[2] - c[0]
         area = abs(e1[0] * e2[1] - e1[1] * e2[0])
-        results.append((int(inl.sum()), area, float(resid[inl].mean()), H, Hinv, idx, resid, inl, c))
+        results.append((n_uniq, area, float(resid[inl].mean()), H, Hinv, idx, resid, inl, c))
     if not results:
         return [] if return_all else None
     best_n = max(r[0] for r in results)
