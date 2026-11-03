@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # Đọc/ghi file cấu hình YAML theo đường dẫn tính từ gốc repo.
+import io
 import os
 import yaml
 
@@ -11,13 +12,13 @@ def path(rel):
 
 
 def load(rel):
-    with open(path(rel)) as fh:
+    with io.open(path(rel), encoding='utf-8') as fh:   # Windows mặc định cp1252 -> lỗi chữ Việt
         return yaml.safe_load(fh)
 
 
 def save(rel, data, header=None):
     p = path(rel)
-    with open(p, 'w') as fh:
+    with io.open(p, 'w', encoding='utf-8') as fh:
         if header:
             for line in header.strip().splitlines():
                 fh.write('# ' + line + '\n')

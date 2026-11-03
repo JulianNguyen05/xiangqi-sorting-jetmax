@@ -90,7 +90,8 @@ class SimpleEngine(object):
         if not legal:
             return EngineResult(None, None, None, 0, 0, 0, [], 0.0)
         res = (None, [legal[0]], 0)
-        for d in range(1, (depth or self.max_depth) + 1):   # đào sâu dần: hết giờ thì dùng kết quả vòng trước
+        # engine Python chậm: không cho vượt max_depth dù được yêu cầu sâu hơn (vd. depth=10 dành cho Pikafish)
+        for d in range(1, min(depth or self.max_depth, self.max_depth) + 1):   # đào sâu dần
             try:
                 sc, pv = self._search(board, side, d, -MATE * 2, MATE * 2, 0)
             except TimeoutError:

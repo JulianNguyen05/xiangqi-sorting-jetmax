@@ -3,6 +3,8 @@
 #
 # Trên LAPTOP:  python tools/pack.py             -> dist/xiangqi_to_robot.zip  (code + model + Pikafish, KHÔNG gồm số đo của robot)
 #               python tools/pack.py --no-model  -> chỉ code (nhẹ, khi model trên robot không đổi)
+#               python tools/pack.py --target windows -> dist/xiangqi_demo_windows.zip (demo trên laptop Windows,
+#                                                        Pikafish từ: sh tools/build_pikafish.sh windows)
 # Trên ROBOT:   python3 tools/pack.py --results  -> dist/results_<giờ>.zip    (runs/, captures/, config/ để mang về)
 #
 # Giải nén trên robot (không cần lệnh unzip):
@@ -30,9 +32,15 @@ ap = argparse.ArgumentParser()
 ap.add_argument('--results', action='store_true', help='TRÊN ROBOT: gói runs/ captures/ config/ để mang về')
 ap.add_argument('--no-model', action='store_true')
 ap.add_argument('--with-docs', action='store_true', help='kèm thư mục docs/ (mặc định bỏ cho nhẹ)')
-ap.add_argument('--engine-dir', default=ENGINE_DIR, help='thư mục chứa pikafish + pikafish.nnue cho Jetson')
+ap.add_argument('--target', default='robot', choices=['robot', 'windows'], help='robot (Jetson) hoặc laptop Windows (demo)')
+ap.add_argument('--engine-dir', default=None, help='thư mục chứa pikafish(.exe) + pikafish.nnue '
+                '(mặc định dist/pikafish_jetson hoặc dist/pikafish_windows)')
 ap.add_argument('--no-engine', action='store_true', help='không kèm Pikafish (khi robot đã có, gói nhẹ hơn ~45 MB)')
 a = ap.parse_args()
+if a.engine_dir is None:
+    a.engine_dir = ENGINE_DIR if a.target == 'robot' else os.path.join('dist', 'pikafish_windows')
+if a.target == 'windows':
+    CODE += ['DEMO_WINDOWS.md', 'run_demo.bat', 'requirements-demo.txt']
 os.makedirs(os.path.join(ROOT, 'dist'), exist_ok=True)
 
 
@@ -72,7 +80,7 @@ else:
         if r.startswith('docs/') and not a.with_docs:
             return False
         return True
-    out = os.path.join(ROOT, 'dist', 'xiangqi_to_robot.zip')
+    out = os.path.join(ROOT, 'dist', 'xiangqi_to_robot.zip' if a.target == 'robot' else 'xiangqi_demo_windows.zip')
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as zf:
         n = add_tree(zf, CODE + ([] if a.no_model else ['models/best.onnx']), keep)
         version = ['đóng gói lúc ' + time.strftime('%Y-%m-%d %H:%M')]
@@ -89,9 +97,10 @@ else:
             version.append('models/best.onnx md5 ' + file_md5(onnx))
         edir = os.path.join(ROOT, a.engine_dir) if not os.path.isabs(a.engine_dir) else a.engine_dir
         if not a.no_engine:
-            if os.path.exists(os.path.join(edir, 'pikafish')) and os.path.exists(os.path.join(edir, 'pikafish.nnue')):
+            exe = 'pikafish' if a.target == 'robot' else 'pikafish.exe'
+            if os.path.exists(os.path.join(edir, exe)) and os.path.exists(os.path.join(edir, 'pikafish.nnue')):
                 print('  + engine/ (từ %s)' % edir)
-                for f in ('pikafish', 'pikafish.nnue', 'VERSION.txt'):
+                for f in (exe, 'pikafish.nnue', 'VERSION.txt'):
                     if os.path.exists(os.path.join(edir, f)):
                         zi = zipfile.ZipInfo.from_file(os.path.join(edir, f), TOP + '/engine/' + f)
                         zi.compress_type = zipfile.ZIP_DEFLATED
@@ -102,14 +111,16 @@ else:
                 if os.path.exists(vf):
                     version.append('engine: ' + open(vf).read().strip())
             else:
-                print('CẢNH BÁO: không thấy %s/pikafish + pikafish.nnue -> gói KHÔNG có engine '
-                      '(chạy: sh tools/build_pikafish.sh jetson)' % edir)
+                print('CẢNH BÁO: không thấy %s/%s + pikafish.nnue -> gói KHÔNG có engine '
+                      '(chạy: sh tools/build_pikafish.sh %s)' % (edir, exe, 'jetson' if a.target == 'robot' else 'windows'))
         zf.writestr(TOP + '/VERSION.txt', '\n'.join(version) + '\n')
         n += 1
     if not a.no_model and not os.path.exists(os.path.join(ROOT, 'models', 'best.onnx')):
         print('CẢNH BÁO: không có models/best.onnx trong gói')
 print('Đã tạo %s (%d file, %.1f MB)' % (out, n, os.path.getsize(out) / 1e6))
-if not a.results:
+if not a.results and a.target == 'windows':
+    print('Trên laptop Windows: giải nén, bấm đúp run_demo.bat (xem DEMO_WINDOWS.md)')
+elif not a.results:
     print('Kéo file này vào cửa sổ NoMachine, rồi trên robot:')
     print('  cd ~ && python3 -m zipfile -e <đường dẫn>/xiangqi_to_robot.zip ~/')
     print('  cd ~/xiangqi && sh install.sh')

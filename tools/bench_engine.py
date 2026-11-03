@@ -36,8 +36,10 @@ def rss_mb(pid):
 
 def main():
     ap = argparse.ArgumentParser()
-    _def = os.path.join(ROOT, 'engine', 'pikafish')                 # gói Bước 6; cài riêng thì ~/pikafish/pikafish
-ap.add_argument('--engine', default=_def if os.path.exists(_def) else os.path.expanduser('~/pikafish/pikafish'))
+    # gói Bước 6 (robot: engine/pikafish, laptop Windows: engine/pikafish.exe); cài riêng thì ~/pikafish/pikafish
+    cands = [os.path.join(ROOT, 'engine', f) for f in ('pikafish', 'pikafish.exe')]
+    _def = next((c for c in cands if os.path.exists(c)), os.path.expanduser('~/pikafish/pikafish'))
+    ap.add_argument('--engine', default=_def)
     ap.add_argument('--nnue', default=None, help='mặc định: pikafish.nnue cạnh file engine')
     ap.add_argument('--simple', action='store_true')
     ap.add_argument('--depths', type=int, nargs='+', default=[6, 8, 10, 12])

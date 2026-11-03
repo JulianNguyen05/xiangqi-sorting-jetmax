@@ -1,0 +1,7 @@
+# Thư viện cho giao diện demo trên laptop (Windows / Linux), Python 3.10 – 3.12
+numpy
+opencv-python
+pyyaml
+onnxruntime
+matplotlib
+gradio>=5,<7

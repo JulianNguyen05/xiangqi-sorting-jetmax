@@ -39,7 +39,7 @@ DEFAULTS = {
     'rotations': [0],                   # 1 lần chạy YOLO: Bước 2 cho thấy mô hình không giảm độ chính xác khi quân xoay
     'locate': 'auto',                   # 'board' (bàn của đề tài) | 'lattice' (bàn bất kỳ) | 'auto' (thử board rồi lattice)
     'red_hint': None,                   # điểm ảnh gần phía quân Đỏ (mặc định: cạnh dưới ảnh)
-    'engine': ['engine/pikafish', '~/pikafish/pikafish'],   # thử lần lượt; không có thì dùng engine Python
+    'engine': ['engine/pikafish', 'engine/pikafish.exe', '~/pikafish/pikafish'],   # thử lần lượt; không có thì engine Python
     'depth': 8,
     'movetime_ms': None,                # đặt số này thì engine tính theo thời gian thay vì độ sâu
     'threads': 2,

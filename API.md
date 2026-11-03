@@ -419,3 +419,5 @@ with UciEngine('engine/pikafish', eval_file='engine/pikafish.nnue', threads=2, h
 | `python3 tests/test_rules.py [--engine engine/pikafish]` | Tự kiểm tra luật cờ, khớp lưới, engine |
 | `python3 tests/test_brain.py [--engine engine/pikafish]` | Tự kiểm tra thư viện trên ảnh mẫu |
 | `python3 tools/pack.py` | (Laptop) đóng gói `dist/xiangqi_to_robot.zip` |
+| `py tools\demo_app.py` hoặc `run_demo.bat` | Giao diện demo trên laptop (xem [DEMO_WINDOWS.md](DEMO_WINDOWS.md)) |
+| `python3 tools/pack.py --target windows` | Đóng gói `dist/xiangqi_demo_windows.zip` cho laptop Windows |

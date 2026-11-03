@@ -6,6 +6,8 @@ Robot JetMax nhìn bàn cờ và **vùng chờ** (quân rải cạnh bàn), nh�
 
 **Dùng thư viện ảnh → nước đi (`XiangqiBrain`): xem [API.md](API.md).**
 
+**Demo trên laptop Windows (không cần robot): xem [DEMO_WINDOWS.md](DEMO_WINDOWS.md).**
+
 ## Luồng xử lý
 
 ```
@@ -48,6 +50,7 @@ tư thế quan sát (1 hay nhiều view, có thể trượt)
 | `tools/test_board_photo.py` | Thử định vị bàn trên ảnh |
 | `install.sh` | Cài đặt trên robot sau khi chép gói: build `best.engine`, kiểm tra Pikafish, tự kiểm tra |
 | `tools/brain_demo.py` | Chạy thử thư viện trên ảnh hoặc camera robot |
+| `tools/demo_app.py`, `run_demo.bat` | Giao diện demo trong trình duyệt (tải ảnh lên → nước đi), chạy trên laptop Windows / Colab |
 | `tools/build_pikafish.sh` | Build Pikafish cho Jetson (aarch64, link tĩnh) trên máy có mạng |
 | `tools/bench_engine.py` | Đo tốc độ engine trên robot |
 | `tests/test_rules.py`, `tests/test_brain.py` | Tự kiểm tra luật cờ + engine; thư viện `XiangqiBrain` trên ảnh mẫu |

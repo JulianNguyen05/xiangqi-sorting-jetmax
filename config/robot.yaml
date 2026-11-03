@@ -70,7 +70,7 @@ brain:                          # thư viện ảnh -> nước đi (brain/xiangq
   rotations: [0]                # 1 lần chạy YOLO (Bước 2: mô hình không giảm độ chính xác khi quân xoay)
   locate: auto                  # board (bàn của đề tài) -> lattice (bàn bất kỳ) nếu không thấy bàn
   red_hint: null                # [x, y] điểm ảnh gần phía Đỏ; null = cạnh dưới ảnh
-  engine: [engine/pikafish, ~/pikafish/pikafish]   # thử lần lượt; không có thì dùng engine Python
+  engine: [engine/pikafish, engine/pikafish.exe, ~/pikafish/pikafish]   # thử lần lượt (.exe: laptop Windows); không có thì engine Python
   depth: 8                      # chọn lại sau khi chạy tools/bench_engine.py trên robot
   movetime_ms: null             # đặt số (vd. 2000) để tính theo thời gian thay vì độ sâu
   threads: 2

@@ -3,6 +3,7 @@
 # Gốc (0, 0) tại a0; u tăng theo cột a -> i, v tăng theo hàng 0 -> 9 (Đỏ ở hàng 0..4, Đen ở 5..9).
 # Tương thích Python 3.6 (Jetson Nano của JetMax).
 
+import io
 import os
 import yaml
 
@@ -37,7 +38,7 @@ class BoardGeometry(object):
     def load(cls, path=None):
         if path is None:
             path = os.path.join(os.path.dirname(__file__), '..', 'config', 'board.yaml')
-        with open(path) as fh:
+        with io.open(path, encoding='utf-8') as fh:       # Windows mặc định cp1252 -> lỗi chữ Việt
             return cls(yaml.safe_load(fh))
 
     def square_mm(self, f, r):
