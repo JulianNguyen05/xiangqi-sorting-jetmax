@@ -18,7 +18,7 @@ from brain.uci import UciEngine        # noqa: E402
 # Khai cuộc + 2 thế giữa trận (lấy từ ván Pikafish tự đánh trong notebook)
 FENS = [
     R.START,
-    'r1bakab1r/9/1cn4c1/p1p1p1p1p/9/6P2/P1P1P3P/1C2C1N2/9/RNBAKAB1R b - - 0 1',
+    'r1bakab1r/9/1cn3nc1/p1p1p1p1p/9/2P3P2/P3P3P/1C2C1N2/9/RNBAKAB1R b - - 0 1',
     '2bakab2/9/2n1c4/p3p1p1p/2p6/6P2/P1P1P3P/4C1N2/4A4/2BAK1B2 w - - 0 1',
 ]
 
@@ -58,6 +58,7 @@ def main():
     rows = []
     for i, fen in enumerate(FENS):
         for d in a.depths:
+            eng.new_game()                       # xoá bảng băm: mỗi lần đo bắt đầu từ đầu
             t0 = time.time()
             r = eng.best_move(fen, depth=d)
             dt = (time.time() - t0) * 1000

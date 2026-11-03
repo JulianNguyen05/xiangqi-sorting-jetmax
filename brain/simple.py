@@ -106,6 +106,9 @@ class SimpleEngine(object):
                             None if mate is not None else sc, mate, d, self.nodes, uci_pv,
                             (time.time() - t0) * 1000.0)
 
+    def new_game(self):
+        pass
+
     def close(self):
         pass
 
