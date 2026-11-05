@@ -29,10 +29,22 @@ MIN_SUPPORT = 0.4       # tỉ lệ đoạn dò thấy đường, dưới mức 
 
 
 def red_mask(bgr):
+    """Mặt nạ đường kẻ đỏ = (1) phân ngưỡng HSV hai khoảng H (đỏ đậm) OR (2) đường đỏ MẢNH, nhạt.
+    (2) cần cho ảnh camera robot 640x480: đường kẻ chỉ ~1 px nên bị trộn với nền trắng, S thấp, (1) bỏ sót."""
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     m1 = cv2.inRange(hsv, (0, 70, 60), (10, 255, 255))
     m2 = cv2.inRange(hsv, (165, 70, 60), (180, 255, 255))
-    return cv2.bitwise_or(m1, m2)
+    return cv2.bitwise_or(cv2.bitwise_or(m1, m2), thin_red_mask(bgr))
+
+
+def thin_red_mask(bgr, k=7, t=8):
+    """Đường đỏ mảnh: độ đỏ = R - max(G, B); top-hat (độ đỏ - phép mở k x k) giữ cấu trúc mảnh hơn k px
+    và bỏ vùng đỏ/nâu rộng (mặt bàn gỗ). Điểm có top-hat > t và độ đỏ > t."""
+    b = bgr.astype(np.int16)
+    red = np.clip(b[..., 2] - np.maximum(b[..., 0], b[..., 1]), 0, 255).astype(np.uint8)
+    opened = cv2.morphologyEx(red, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (k, k)))
+    top = cv2.subtract(red, opened)
+    return (((top > t) & (red > t)) * 255).astype(np.uint8)
 
 
 def _quad(mask):
@@ -326,8 +338,10 @@ def _proj_eval(sol, x):
     return (a * x + b) / (c * x + 1.0)
 
 
-def _match_1d(T, X, rel_tol=0.25):
-    """Ghép các vị trí đo T (px, tăng dần) với vị trí mẫu X (mm). Trả về (số khớp, {chỉ_số_mẫu: chỉ_số_đo}, px/mm)."""
+def _match_1d(T, X, rel_tol=0.25, W=None):
+    """Ghép các vị trí đo T (px, tăng dần) với vị trí mẫu X (mm). Trả về (số khớp, {chỉ_số_mẫu: chỉ_số_đo}, px/mm).
+    W: độ dài (tổng điểm ảnh) của từng đường đo; cùng số đường khớp thì ưu tiên cách ghép dùng các đường dài hơn
+    (đường lưới thật) thay vì nét chữ / mép giấy."""
     T = np.asarray(T, np.float64)
     X = np.asarray(X, np.float64)
     n, m = len(T), len(X)
@@ -352,7 +366,7 @@ def _match_1d(T, X, rel_tol=0.25):
     tol = rel_tol * np.abs(a)[:, None] * dmin
     score = (D < tol).sum(axis=1) - 0.01 * np.where(D < tol, D / tol, 0).sum(axis=1)
     best = None
-    for h in np.argsort(-score)[:20]:                # tinh chỉnh bằng phép chiếu 1D (chịu phối cảnh)
+    for h in np.argsort(-score)[:60]:                # tinh chỉnh bằng phép chiếu 1D (chịu phối cảnh)
         pred = P[h]
         for _ in range(3):
             pairs = {}
@@ -369,7 +383,8 @@ def _match_1d(T, X, rel_tol=0.25):
         if len(set(pairs.values())) != len(pairs):
             continue
         res = np.mean([abs(T[pairs[k]] - pred[k]) for k in pairs]) if pairs else 1e9
-        key = (len(pairs), -res)
+        wsum = 0.0 if W is None else float(sum(W[pairs[k]] for k in pairs)) / float(sum(W))
+        key = (len(pairs), round(wsum, 2), -res)
         if best is None or key > best[0]:
             best = (key, pairs, abs(a[h]))
     if best is None:
@@ -402,15 +417,17 @@ def _coarse_lines(mask, geom, red_hint):
     files, ranks = geom.file_lines(), geom.rank_lines()
     best = None
     for fa, ra in ((0, 1), (1, 0)):                  # họ nào là cột, họ nào là hàng
-        nf, pf, kf = _match_1d([x[0] for x in lines[fa]], files)
-        nr, pr, kr = _match_1d([x[0] for x in lines[ra]], ranks)
+        nf, pf, kf = _match_1d([x[0] for x in lines[fa]], files, W=[x[3] for x in lines[fa]])
+        nr, pr, kr = _match_1d([x[0] for x in lines[ra]], ranks, W=[x[3] for x in lines[ra]])
         if nf < 3 or nr < 3 or not (0.5 < kf / kr < 2.0):
             continue
-        if best is None or nf + nr > best[0]:
-            best = (nf + nr, fa, ra, pf, pr)
-    if best is None or best[0] < 10:
+        # cùng số đường khớp thì chọn cách gán có tỉ lệ px/mm hai trục gần nhau hơn (camera nhìn gần thẳng xuống)
+        sc = nf + nr - 2.0 * abs(np.log(kf / kr))
+        if best is None or sc > best[0]:
+            best = (sc, fa, ra, pf, pr, nf + nr)
+    if best is None or best[5] < 10:
         return None
-    _, fa, ra, pf, pr = best
+    _, fa, ra, pf, pr, _ = best
     src, dst = [], []
     for f, i in pf.items():
         for r, j in pr.items():

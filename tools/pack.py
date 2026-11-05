@@ -21,7 +21,7 @@ TOP = 'xiangqi'                                        # tên thư mục khi gi�
 
 # CHỈ đóng gói những gì robot cần (danh sách trắng), không duyệt cả repo (.venv, dataset, run Colab... rất nặng)
 CODE = ['main.py', 'README.md', 'RUNBOOK.md', 'API.md', 'install.sh', 'board', 'brain', 'config', 'planner', 'robot', 'tests',
-        'tools', 'vision', 'samples/board_empty.jpg', 'samples/start_position.jpg', 'models/README.txt']
+        'tools', 'vision', 'samples/board_empty.jpg', 'samples/start_position.jpg', 'samples/camera_start_position.jpg', 'models/README.txt']
 # Engine cờ tướng build sẵn cho Jetson (tools/build_pikafish.sh jetson) -> trong gói nằm ở engine/
 ENGINE_DIR = os.path.join('dist', 'pikafish_jetson')
 SKIP_DIRS = {'.git', '__pycache__', '.pytest_cache', 'runs', 'captures', 'dist', 'training', '.vscode', '.idea'}

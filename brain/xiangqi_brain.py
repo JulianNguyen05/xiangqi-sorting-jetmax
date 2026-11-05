@@ -21,6 +21,7 @@
 #
 # Python 3.6, chỉ cần numpy + OpenCV (+ TensorRT hoặc onnxruntime cho YOLO).
 import os
+import time
 
 import numpy as np
 
@@ -126,12 +127,15 @@ class XiangqiBrain(object):
         board {(f, r): mã} hoặc None, method 'board'/'lattice'/None, pieces (danh sách Piece), n_pieces, n_on_board,
         enhance {'stats': số đo ảnh, 'steps': các bước tăng cường đã áp dụng}."""
         from vision import enhance
+        t0 = time.time()
         ecfg = self.cfg.get('enhance') or {'mode': 'off'}
         good, einfo = enhance.enhance(bgr, ecfg)
+        t1 = time.time()
         targets = enhance.settings(ecfg)['apply_to'] or []
         img_pieces = good if 'pieces' in targets else bgr
         img_board = good if 'board' in targets else bgr
         pieces = self.detector.detect(img_pieces)
+        t2 = time.time()
         pts = np.array([[p.x, p.y] for p in pieces], np.float64).reshape(-1, 2)
         codes = [p.code for p in pieces]
         confs = [p.conf for p in pieces]
@@ -151,6 +155,7 @@ class XiangqiBrain(object):
                 out.update(board=b, method='lattice')
         if out['board'] is not None:
             out['n_on_board'] = len(out['board'])
+        out['times'] = {'enhance_ms': (t1 - t0) * 1000, 'detect_ms': (t2 - t1) * 1000, 'locate_ms': (time.time() - t2) * 1000}
         return out
 
     def _by_board_detect(self, bgr, pts, codes, confs):
@@ -163,8 +168,9 @@ class XiangqiBrain(object):
             return None
         if fix is None or len(fix.pts_px) < NF * NR:
             return None
-        keys = sorted(fix.pts_px)
-        grid = np.array([fix.pts_px[k] for k in keys], np.float64)
+        pts_px = self._snap_grid(fix.pts_px, pts)
+        keys = sorted(pts_px)
+        grid = np.array([pts_px[k] for k in keys], np.float64)
         # cỡ ô (px) = trung vị khoảng cách tới giao điểm gần nhất
         dd = np.linalg.norm(grid[:, None] - grid[None], axis=2)
         np.fill_diagonal(dd, np.inf)
@@ -178,6 +184,61 @@ class XiangqiBrain(object):
             sq = keys[i]
             if sq not in board or cf > best[sq]:
                 board[sq], best[sq] = c, cf
+        return self._fix_orientation(board)
+
+    def _snap_grid(self, pts_px, pts):
+        """Lưới tìm từ đường kẻ có thể lệch đúng 1 hàng / 1 cột (đường biên bị quân che, khung viền ngoài bị nhận nhầm
+        là đường lưới). Thử dịch lưới -1/0/+1 theo mỗi trục (ngoại suy tuyến tính ở mép), chọn cách có NHIỀU QUÂN nằm
+        đúng giao điểm nhất; chỉ đổi khi hơn hẳn (>= 2 quân)."""
+        if len(pts) < 6:
+            return pts_px
+        P = dict((k, np.asarray(v, np.float64)) for k, v in pts_px.items())
+
+        def ext1(get, i, n):                       # ngoại suy tuyến tính theo một trục, i có thể ra ngoài [0, n-1]
+            if i < 0:
+                return get(0) + i * (get(1) - get(0))
+            if i > n - 1:
+                return get(n - 1) + (i - n + 1) * (get(n - 1) - get(n - 2))
+            return get(i)
+
+        def at(f, r):
+            return ext1(lambda ff: ext1(lambda rr: P[(ff, rr)], r, NR), f, NF)
+
+        g0 = np.array([P[k] for k in sorted(P)])
+        dd = np.linalg.norm(g0[:, None] - g0[None], axis=2)
+        np.fill_diagonal(dd, np.inf)
+        cell = float(np.median(dd.min(axis=1)))
+
+        def score(grid):
+            G = np.array(list(grid.values()))
+            d = np.linalg.norm(pts[:, None] - G[None], axis=2).min(axis=1)
+            return int((d < 0.45 * cell).sum())
+        best, best_sc = pts_px, score(P)
+        base_sc = best_sc
+        for sf_ in (-1, 0, 1):
+            for sr_ in (-1, 0, 1):
+                if sf_ == 0 and sr_ == 0:
+                    continue
+                g = dict(((f, r), at(f + sf_, r + sr_)) for f in range(NF) for r in range(NR))
+                sc = score(g)
+                if sc >= base_sc + 2 and sc > best_sc:
+                    best, best_sc = g, sc
+        if best is not pts_px:
+            self._log('chỉnh lưới lệch 1 hàng/cột theo vị trí quân: %d -> %d quân đúng giao điểm' % (base_sc, best_sc))
+            best = dict((k, (float(v[0]), float(v[1]))) for k, v in best.items())
+        return best
+
+    def _fix_orientation(self, board):
+        """red_hint chọn nhầm phía quân Đỏ -> thế cờ bị xoay 180°. Quân Đỏ / Đen do YOLO nhận theo màu, nên so số quân
+        đứng sai chỗ theo luật (tướng, sĩ ngoài cung, tượng qua sông, tốt lùi...) của thế cờ và thế xoay 180°;
+        thế xoay ít lỗi hơn hẳn thì dùng thế xoay. Hoà thì giữ nguyên."""
+        def bad(b):
+            return sum(1 for i in R.validate(b) if i[0] == 'bad_square')
+        rot = {(NF - 1 - f, NR - 1 - r): c for (f, r), c in board.items()}
+        nb, nr = bad(board), bad(rot)
+        if nr < nb:
+            self._log('đảo hướng bàn cờ 180° (phía Đỏ ngược với red_hint): %d -> %d quân sai chỗ' % (nb, nr))
+            return rot
         return board
 
     # ------------------------------------------------------------------ dùng không giữ trạng thái

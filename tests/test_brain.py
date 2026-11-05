@@ -127,5 +127,29 @@ check('thư viện trên ảnh nhiễu: vẫn đọc đúng khai cuộc', rd['bo
       '%s, tăng cường: %s' % (rd['method'], rd['enhance']['steps']))
 brain.close()
 
+print('== red_hint chọn nhầm phía Đỏ -> tự đảo hướng')
+b2 = XiangqiBrain(detector=det, engine=SimpleEngine(), verbose=False, locate='board', red_hint=(0, 480), depth=2)
+det.board = R.start_board()
+rd = b2.read_board(img)
+check('red_hint ngược: vẫn đọc đúng khai cuộc', rd['board'] == det.board, rd['method'] or '')
+det.board = R.make_move(R.start_board(), R.uci_to_move('h2e2'))
+check('red_hint ngược, giữa ván: vẫn đúng', b2.read_board(img)['board'] == det.board)
+b2.close()
+
+print('== ảnh camera robot 640x480 (samples/camera_start_position.jpg)')
+cam = cv2.imread(os.path.join(ROOT, 'samples/camera_start_position.jpg'))
+if cam is not None:
+    cfix = bd.locate(cam, BoardGeometry.load())
+    check('đường kẻ mảnh: định vị được 90 giao điểm', cfix is not None and len(cfix.pts_px) == 90,
+          '' if cfix is None else '%d đường, %.2f mm' % (cfix.n_lines, cfix.rms_mm))
+    if cfix is not None:
+        P = dict((k, np.asarray(v, np.float64)) for k, v in cfix.pts_px.items())
+        shifted = dict(((f, r), P[(f, r - 1)] if r > 0 else 2 * P[(f, 0)] - P[(f, 1)]) for f in range(9) for r in range(10))
+        det_c = FakeDetector(shifted)
+        det_c.board = R.start_board()
+        b3 = XiangqiBrain(detector=det_c, engine=SimpleEngine(), verbose=False, locate='board', depth=2)
+        check('lưới lệch 1 hàng so với quân -> tự chỉnh, đọc đúng khai cuộc', b3.read_board(cam)['board'] == R.start_board())
+        b3.close()
+
 print('\nKẾT QUẢ: %s' % ('TẤT CẢ OK' if not fails else '%d LỖI: %s' % (len(fails), ', '.join(fails))))
 sys.exit(1 if fails else 0)

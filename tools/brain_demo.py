@@ -4,6 +4,7 @@
 #   python3 tools/brain_demo.py anh.jpg                       # ảnh -> FEN -> nước tiếp theo cho Đỏ
 #   python3 tools/brain_demo.py anh.jpg --side b
 #   python3 tools/brain_demo.py anh2.jpg --prev "<FEN lượt trước>"   # suy ra nước vừa đi + sửa lỗi nhận diện
+#   python3 tools/brain_demo.py anh.jpg --repeat 3            # đo thời gian (lần 1 chậm do GPU khởi động)
 #   python3 tools/brain_demo.py --camera                      # TRÊN ROBOT: chơi cả ván, người đi quân thay tay máy
 #
 # Ảnh có chú thích lưu ở runs/brain_<giờ>.jpg.
@@ -26,6 +27,7 @@ ap.add_argument('--side', default='w', help="bên đi tiếp khi không có --pr
 ap.add_argument('--camera', action='store_true', help='chụp từ camera robot (ROS), chơi cả ván')
 ap.add_argument('--depth', type=int, default=None)
 ap.add_argument('--locate', default=None, choices=['auto', 'board', 'lattice'])
+ap.add_argument('--repeat', type=int, default=1, help='chạy lại N lần trên cùng ảnh để đo thời gian khi đã "nóng máy"')
 a = ap.parse_args()
 
 
@@ -48,8 +50,13 @@ if not a.camera:
     img = cv2.imread(a.image)
     if img is None:
         sys.exit('Không đọc được ảnh ' + a.image)
-    t0 = time.time()
-    res = brain.analyze(img, prev_fen=a.prev, side=a.side)
+    for k in range(max(1, a.repeat)):
+        t0 = time.time()
+        res = brain.analyze(img, prev_fen=a.prev, side=a.side)
+        tt = res['read'].get('times', {})
+        print('Lần %d: tổng %.0f ms | tăng cường ảnh %.0f | YOLO %.0f | định vị bàn %.0f | engine %.0f ms' % (
+            k + 1, (time.time() - t0) * 1000, tt.get('enhance_ms', 0), tt.get('detect_ms', 0), tt.get('locate_ms', 0),
+            res.get('think_ms') or 0))
     rd = res['read']
     print('Quân nhận diện : %d (trên bàn: %d, cách định vị: %s)' % (rd['n_pieces'], rd['n_on_board'], rd['method']))
     print('Trạng thái     : %s %s' % (res['status'], '; '.join(res['issues'])))
@@ -60,7 +67,6 @@ if not a.camera:
         print('NƯỚC TIẾP THEO : %s = %s (%s -> %s), điểm %s, %.0f ms' % (
             res['best_move'], res['best_move_vn'], res['best_move_from'], res['best_move_to'],
             res['score_cp'] if res['mate'] is None else 'chiếu bí sau %d' % res['mate'], res['think_ms']))
-    print('Tổng thời gian : %.0f ms' % ((time.time() - t0) * 1000))
     print('Ảnh            :', save(img, rd, '%s %s' % (res['status'], res['best_move_vn'] or '')))
     brain.close()
     sys.exit(0)
