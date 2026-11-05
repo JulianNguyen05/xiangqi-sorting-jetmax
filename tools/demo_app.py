@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # GIAO DIỆN DEMO thư viện XiangqiBrain (chạy trên laptop Windows / Linux / Colab, mở bằng trình duyệt).
-#   py tools\demo_app.py              (Windows)      -> tự mở http://127.0.0.1:7860
+#   py -3 tools\demo_app.py           (Windows; dùng -3 để py bỏ qua dòng #! ở trên)      -> tự mở http://127.0.0.1:7860
 #   python3 tools/demo_app.py --share (Colab)        -> in ra đường link công khai
 # Hai thẻ:
 #   1. Phân tích 1 ảnh : ảnh (+ FEN lượt trước) -> thế cờ, nước tiếp theo
@@ -106,6 +106,13 @@ def analyze_one(rgb, side_label, prev_fen, depth):
         lines.append('Ghi chú: ' + '; '.join(res['issues']))
     lines = ['\n\n'.join(lines), '| | |\n|---|---|']
     lines.append('| Quân nhận diện | %d (trên bàn %d, định vị bằng `%s`) |' % (rd['n_pieces'], rd['n_on_board'], rd['method']))
+    ei = rd.get('enhance') or {}
+    if ei.get('stats'):
+        st = ei['stats']
+        lines.append('| Chất lượng ảnh | sáng L = %.0f, nhiễu = %.1f, ám màu = %.2f |' % (st['brightness'], st['noise'], st['cast']))
+        lines.append('| Tăng cường ảnh | %s |' % (', '.join({'denoise': 'lọc song phương', 'white_balance': 'cân bằng trắng Gray-World',
+                                                              'gamma': 'gamma', 'clahe': 'CLAHE'}[k] for k in ei['steps'])
+                                                     or 'không cần (ảnh tốt)'))
     lines.append('| Thời gian | tổng %.0f ms, engine %.0f ms |' % (total, res.get('think_ms') or 0))
     lines.append('| Engine | %s |' % ENGINE_NAME)
     if res['fen']:

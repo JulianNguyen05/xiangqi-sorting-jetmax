@@ -104,6 +104,27 @@ check('lượt 2', r2['status'] == 'robot_move' and r2['human_move']['uci'] == '
 brain.confirm(r2['robot_move']['uci'])
 det.board = {}
 check('ảnh không có quân -> retake', brain.step(img)['status'] == 'retake')
+
+print('== tăng cường ảnh (vision/enhance.py)')
+from vision import enhance as E                      # noqa: E402
+_, inf = E.enhance(img, {'mode': 'auto'})
+check('ảnh tốt -> không áp dụng bước nào', inf['steps'] == [], 'L %.0f, nhiễu %.1f, ám %.2f' % (
+    inf['stats']['brightness'], inf['stats']['noise'], inf['stats']['cast']))
+noisy = np.clip(img.astype(np.int16) + np.random.RandomState(0).normal(0, 22, img.shape).astype(np.int16), 0, 255).astype(np.uint8)
+out, inf = E.enhance(noisy, {'mode': 'auto'})
+check('ảnh nhiễu -> lọc song phương', inf['steps'] == ['denoise'], 'nhiễu %.1f' % inf['stats']['noise'])
+check('ảnh nhiễu: không lọc thì mất bàn, lọc thì tìm lại được',
+      bd.locate(noisy, BoardGeometry.load(), red_hint=(1280, 480)) is None and
+      bd.locate(out, BoardGeometry.load(), red_hint=(1280, 480)) is not None)
+dark = E.gamma(img, 3.0)
+check('ảnh tối -> CLAHE', E.enhance(dark, {'mode': 'auto'})[1]['steps'] == ['clahe'])
+warm = np.clip(img.astype(np.float32) * np.array([0.75, 0.95, 1.15]), 0, 255).astype(np.uint8)
+check('ảnh ám vàng -> cân bằng trắng', E.enhance(warm, {'mode': 'auto'})[1]['steps'] == ['white_balance'])
+check('mode off -> giữ nguyên ảnh', E.enhance(noisy, {'mode': 'off'})[0] is noisy)
+det.board = R.start_board()
+rd = brain.read_board(noisy)
+check('thư viện trên ảnh nhiễu: vẫn đọc đúng khai cuộc', rd['board'] == det.board and rd['method'] == 'board',
+      '%s, tăng cường: %s' % (rd['method'], rd['enhance']['steps']))
 brain.close()
 
 print('\nKẾT QUẢ: %s' % ('TẤT CẢ OK' if not fails else '%d LỖI: %s' % (len(fails), ', '.join(fails))))

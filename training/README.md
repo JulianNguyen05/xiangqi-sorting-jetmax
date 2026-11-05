@@ -22,7 +22,7 @@ image_preprocessing (minh hoạ xử lý ảnh, chạy độc lập bất kỳ l
 | `board_to_fen.ipynb` (Bước 4) | Khớp lưới 9×10 từ tâm quân, đánh giá ảnh → FEN trên tập test, quét ngưỡng tin cậy | `best.onnx`, tập test | Bảng số liệu, hình | Không |
 | `rules_engine.ipynb` (Bước 5) | Luật cờ, perft, kiểm tra thế cờ, suy ra nước vừa đi và **tự sửa lỗi nhận dạng**; biên dịch Pikafish, gọi qua UCI | — | `pikafish_jetson.tar.gz`, số liệu | Không |
 | `package.ipynb` (Bước 6) | Kiểm thử thư viện `XiangqiBrain`, đóng gói một file cho robot và gói demo Windows | `best.onnx`, Pikafish | `xiangqi_to_robot.zip`, `xiangqi_demo_windows.zip` | Không |
-| `image_preprocessing.ipynb` | Minh hoạ **từng bước xử lý ảnh** trên 3 ảnh thật trong `samples/`: letterbox, HSV, phân ngưỡng, hình thái học, Hough, homography, màu quân, khảo sát CLAHE / gamma / Gray-World / lọc song phương | `samples/*.jpg/png` | Hình minh hoạ | Không |
+| `image_preprocessing.ipynb` | Minh hoạ **từng bước xử lý ảnh** trên 3 ảnh thật trong `samples/`: letterbox, HSV, phân ngưỡng, hình thái học, Hough, homography, màu quân; **tăng cường ảnh tự động** (`vision/enhance.py`: lọc song phương, Gray-World, CLAHE, gamma) | `samples/*.jpg/png` | Hình minh hoạ | Không |
 
 ## Ảnh mẫu (`samples/`)
 
@@ -102,8 +102,17 @@ Gọi đúng các hàm của thư viện trên ảnh thật:
 | HoughLinesP → 2 họ đường | `_line_families()` | 2 họ đường ~90° |
 | Homography + 90 giao điểm | `locate()` | 17 đường, sai lệch 0.61 mm |
 | Màu quân (đỏ / đen) | `vision/pieces.py: ink_color()` | — |
+| Đo ảnh, tự bật khử nhiễu / cân bằng trắng / CLAHE | `vision/enhance.py: enhance()` | Ảnh tốt: không bước nào (giữ nguyên) |
 
-Khảo sát tăng cường (ảnh suy giảm được mô phỏng): thiếu sáng và ám màu không làm hỏng định vị bàn cờ; **nhiễu mạnh làm mất bàn cờ, lọc song phương khôi phục lại được**. Thư viện mặc định không bật tăng cường.
+Tăng cường ảnh (`brain.enhance` trong `config/robot.yaml`, mặc định `mode: auto`, chỉ cho ảnh định vị bàn cờ). Trên ảnh suy giảm được mô phỏng:
+
+| Ảnh | `auto` áp dụng | Định vị bàn: trước → sau |
+|---|---|---|
+| 3 ảnh mẫu, ảnh hơi tối | không | giữ nguyên |
+| Rất tối (L 85) | CLAHE | 16 đường → 14 đường (đều tìm được) |
+| Ám vàng | Gray-World | 17 → 17 đường |
+| Nhiễu σ = 22 / 30 / 40 | lọc song phương | **mất bàn → tìm được** |
+| Rất tối + nhiễu σ = 16 | lọc + CLAHE | mất bàn → vẫn mất (chuyển sang `lattice` / chụp lại) |
 
 ## Mang sang robot
 

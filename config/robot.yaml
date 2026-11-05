@@ -77,3 +77,13 @@ brain:                          # thư viện ảnh -> nước đi (brain/xiangq
   hash_mb: 64
   robot_side: b                 # robot cầm Đen, người đi trước
   max_cost: 2                   # số ô nhận diện sai tối đa còn tự sửa
+  enhance:                      # tăng cường ảnh trước nhận dạng (vision/enhance.py, training/image_preprocessing.ipynb)
+    mode: auto                  # off | auto (đo ảnh, chỉ bật bước cần) | manual (bật đúng các mục dưới)
+    apply_to: [board]           # board: ảnh cho định vị bàn cờ; thêm pieces để dùng cả cho YOLO (chưa đo đủ)
+    denoise: true               # lọc song phương - auto: khi nhiễu > noise_max
+    white_balance: true         # Gray-World      - auto: khi độ ám màu > cast_max
+    clahe: true                 # CLAHE kênh L    - auto: khi độ sáng L < dark_L
+    gamma: null                 # chỉ manual, vd. 0.6 làm sáng ảnh tối
+    noise_max: 4.0
+    cast_max: 1.25
+    dark_L: 100

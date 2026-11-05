@@ -234,6 +234,7 @@ rd = brain.read_board(bgr)
 | `method` | `'board'` (bàn của đề tài, `vision/board_detect.py`) / `'lattice'` (bàn bất kỳ, `vision/lattice.py`) / `None` |
 | `pieces` | Danh sách `Piece` mô hình nhận diện được: `.x .y .r` (pixel), `.code` (mã FEN), `.conf` |
 | `n_pieces`, `n_on_board` | Số quân nhận diện được / số quân nằm trên giao điểm |
+| `enhance` | `{'stats': {'brightness', 'noise', 'cast'}, 'steps': [...]}`: số đo chất lượng ảnh và các bước tăng cường đã áp dụng (xem mục 7) |
 
 ---
 
@@ -263,6 +264,33 @@ brain:
 | `threads`, `hash_mb` | `2`, `64` | Tài nguyên cho Pikafish (RAM Jetson chỉ 4 GB) | |
 | `robot_side` | `b` | Bên robot cầm trong `step()` | |
 | `max_cost` | `2` | Số ô nhận diện sai tối đa còn tự sửa; lớn hơn → dễ sửa nhầm | Bước 5, mục 5 |
+| `enhance` | `{mode: auto, apply_to: [board]}` | Tăng cường ảnh trước nhận dạng, xem bảng dưới | `image_preprocessing.ipynb`, mục 7 |
+
+#### Tăng cường ảnh (`brain.enhance`, mô-đun `vision/enhance.py`)
+
+```yaml
+brain:
+  enhance:
+    mode: auto            # off | auto | manual
+    apply_to: [board]     # board: ảnh cho định vị bàn cờ; thêm pieces để dùng cả cho YOLO
+```
+
+| Khoá | Mặc định | Ý nghĩa |
+|---|---|---|
+| `mode` | `auto` | `off`: không làm gì. `auto`: đo ảnh, chỉ bật bước cần. `manual`: bật đúng các mục ghi `true` / số |
+| `apply_to` | `[board]` | Ảnh nào được tăng cường. Ảnh cho YOLO mặc định giữ nguyên (mô hình đã học với tăng cường HSV; chưa đo trên camera robot) |
+| `denoise` | `true` | Lọc song phương; `auto` bật khi nhiễu ước lượng > `noise_max` (`4.0`) |
+| `white_balance` | `true` | Cân bằng trắng Gray-World; `auto` bật khi trung bình kênh lớn nhất / nhỏ nhất > `cast_max` (`1.25`) |
+| `clahe` | `true` | CLAHE trên kênh L (LAB); `auto` bật khi độ sáng trung bình L < `dark_L` (`100`) |
+| `gamma` | `null` | Chỉ dùng ở `manual`, ví dụ `0.6` làm sáng ảnh tối |
+
+Ảnh tốt (độ sáng L ~ 170, nhiễu ~ 1) đi qua nguyên vẹn. Trên ảnh nhiễu σ ≥ 22, không lọc thì định vị bàn cờ thất bại, lọc song phương thì tìm lại được (`training/image_preprocessing.ipynb`, mục 7.1). Dùng riêng:
+
+```python
+from vision import enhance
+good, info = enhance.enhance(bgr, {'mode': 'auto'})   # info['steps'], info['stats']
+print(enhance.measure(bgr))                           # {'brightness': ..., 'noise': ..., 'cast': ...}
+```
 
 ---
 
@@ -419,5 +447,5 @@ with UciEngine('engine/pikafish', eval_file='engine/pikafish.nnue', threads=2, h
 | `python3 tests/test_rules.py [--engine engine/pikafish]` | Tự kiểm tra luật cờ, khớp lưới, engine |
 | `python3 tests/test_brain.py [--engine engine/pikafish]` | Tự kiểm tra thư viện trên ảnh mẫu |
 | `python3 tools/pack.py` | (Laptop) đóng gói `dist/xiangqi_to_robot.zip` |
-| `py tools\demo_app.py` hoặc `run_demo.bat` | Giao diện demo trên laptop (xem [DEMO_WINDOWS.md](DEMO_WINDOWS.md)) |
+| `py -3 tools\demo_app.py` hoặc `run_demo.bat` | Giao diện demo trên laptop (xem [DEMO_WINDOWS.md](DEMO_WINDOWS.md)) |
 | `python3 tools/pack.py --target windows` | Đóng gói `dist/xiangqi_demo_windows.zip` cho laptop Windows |

@@ -46,6 +46,7 @@ DEFAULTS = {
     'hash_mb': 64,
     'robot_side': 'b',                  # robot cầm quân Đen, người đi trước
     'max_cost': 2,                      # số ô nhận diện sai tối đa còn tự sửa (Bước 5, mục 5)
+    'enhance': {'mode': 'auto', 'apply_to': ['board']},   # tăng cường ảnh (vision/enhance.py, image_preprocessing.ipynb)
 }
 
 
@@ -122,15 +123,25 @@ class XiangqiBrain(object):
     # ------------------------------------------------------------------ ảnh -> thế cờ
     def read_board(self, bgr):
         """Ảnh -> thế cờ (CHƯA dùng luật cờ). Trả về dict:
-        board {(f, r): mã} hoặc None, method 'board'/'lattice'/None, pieces (danh sách Piece), n_pieces, n_on_board."""
-        pieces = self.detector.detect(bgr)
+        board {(f, r): mã} hoặc None, method 'board'/'lattice'/None, pieces (danh sách Piece), n_pieces, n_on_board,
+        enhance {'stats': số đo ảnh, 'steps': các bước tăng cường đã áp dụng}."""
+        from vision import enhance
+        ecfg = self.cfg.get('enhance') or {'mode': 'off'}
+        good, einfo = enhance.enhance(bgr, ecfg)
+        targets = enhance.settings(ecfg)['apply_to'] or []
+        img_pieces = good if 'pieces' in targets else bgr
+        img_board = good if 'board' in targets else bgr
+        pieces = self.detector.detect(img_pieces)
         pts = np.array([[p.x, p.y] for p in pieces], np.float64).reshape(-1, 2)
         codes = [p.code for p in pieces]
         confs = [p.conf for p in pieces]
-        out = {'board': None, 'method': None, 'pieces': pieces, 'n_pieces': len(pieces), 'n_on_board': 0}
+        out = {'board': None, 'method': None, 'pieces': pieces, 'n_pieces': len(pieces), 'n_on_board': 0,
+               'enhance': einfo}
+        if einfo['steps']:
+            self._log('tăng cường ảnh:', ', '.join(einfo['steps']), '->', ', '.join(targets))
         mode = self.cfg['locate']
         if mode in ('auto', 'board'):
-            b = self._by_board_detect(bgr, pts, codes, confs)
+            b = self._by_board_detect(img_board, pts, codes, confs)
             if b is not None:
                 out.update(board=b, method='board')
         if out['board'] is None and mode in ('auto', 'lattice') and len(pieces) >= 6:
