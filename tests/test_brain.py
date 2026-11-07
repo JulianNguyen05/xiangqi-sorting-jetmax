@@ -110,29 +110,12 @@ from vision import enhance as E                      # noqa: E402
 _, inf = E.enhance(img, {'mode': 'auto'})
 check('ảnh tốt -> không áp dụng bước nào', inf['steps'] == [], 'L %.0f, nhiễu %.1f, ám %.2f' % (
     inf['stats']['brightness'], inf['stats']['noise'], inf['stats']['cast']))
-def add_noise(im, sigma):
-    n = np.random.RandomState(0).normal(0, sigma, im.shape).astype(np.int16)
-    return np.clip(im.astype(np.int16) + n, 0, 255).astype(np.uint8)
-
-
-noisy = add_noise(img, 22)
+noisy = np.clip(img.astype(np.int16) + np.random.RandomState(0).normal(0, 22, img.shape).astype(np.int16), 0, 255).astype(np.uint8)
 out, inf = E.enhance(noisy, {'mode': 'auto'})
 check('ảnh nhiễu -> lọc song phương', inf['steps'] == ['denoise'], 'nhiễu %.1f' % inf['stats']['noise'])
-
-# Yêu cầu thật: ảnh nhiễu sau khi tăng cường phải định vị được bàn.
-# Kết quả khi KHÔNG lọc chỉ in ra để tham khảo (định vị bàn tốt lên thì có thể tự tìm được).
-geo = BoardGeometry.load()
-for sigma in (22, 30, 40):
-    nz = add_noise(img, sigma)
-    raw = bd.locate(nz, geo, red_hint=(1280, 480))
-    nz_out, nz_inf = E.enhance(nz, {'mode': 'auto'})
-    found = bd.locate(nz_out, geo, red_hint=(1280, 480))
-    info = 'không lọc: %s, lọc: %s, tăng cường: %s' % (
-        'tìm được' if raw is not None else 'mất bàn', 'tìm được' if found is not None else 'mất bàn', nz_inf['steps'])
-    if sigma == 22:
-        check('ảnh nhiễu σ = 22: lọc xong định vị được bàn', found is not None, info)
-    else:
-        print('  [INFO] ảnh nhiễu σ = %d  %s' % (sigma, info))   # chỉ ghi nhận, chưa yêu cầu
+raw_ok = bd.locate(noisy, BoardGeometry.load(), red_hint=(1280, 480)) is not None
+check('ảnh nhiễu: sau lọc song phương định vị được bàn', bd.locate(out, BoardGeometry.load(), red_hint=(1280, 480)) is not None,
+      '(không lọc: %s)' % ('vẫn tìm được' if raw_ok else 'mất bàn'))
 dark = E.gamma(img, 3.0)
 check('ảnh tối -> CLAHE', E.enhance(dark, {'mode': 'auto'})[1]['steps'] == ['clahe'])
 warm = np.clip(img.astype(np.float32) * np.array([0.75, 0.95, 1.15]), 0, 255).astype(np.uint8)

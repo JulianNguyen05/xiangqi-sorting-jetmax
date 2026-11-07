@@ -43,6 +43,20 @@ def save(img, read, text):
     return p
 
 
+cam = None
+if a.camera:                                         # mở camera TRƯỚC khi nạp mô hình (nạp TensorRT mất ~40 s)
+    import rospy                                     # noqa: E402
+    from robot import config                         # noqa: E402
+    from robot.camera import RosCamera               # noqa: E402
+    rospy.init_node('xq_brain_demo', anonymous=True)
+    cam = RosCamera(config.robot_cfg())
+    try:
+        f0 = cam.grab(timeout=10.0)
+        print('Camera: %s %dx%d OK' % (cam.topic, f0.shape[1], f0.shape[0]))
+    except RuntimeError as e:
+        sys.exit('%s\nKiểm tra: rostopic hz %s ; không có ảnh thì khởi động lại robot '
+                 '(hoặc xem RUNBOOK.md mục 2a), rồi chạy lại.' % (e, cam.topic))
+
 brain = XiangqiBrain(depth=a.depth, locate=a.locate)
 if not a.camera:
     if not a.image:
@@ -72,18 +86,16 @@ if not a.camera:
     sys.exit(0)
 
 # ------------------------------------------------------------------ chơi cả ván bằng camera robot
-import rospy                                         # noqa: E402
-from robot import config                             # noqa: E402
-from robot.camera import RosCamera                   # noqa: E402
-
-rospy.init_node('xq_brain_demo', anonymous=True)
-cam = RosCamera(config.robot_cfg())
 print('Robot cầm %s. Người đi quân của mình rồi nhấn Enter; robot chỉ NÓI nước đi, bạn đi giúp robot.'
       % ('Đen' if brain.game.robot_side == R.BLACK else 'Đỏ'))
 while not rospy.is_shutdown():
     if input('\nEnter = chụp, q = thoát: ').strip().lower() == 'q':
         break
-    img = cam.grab()
+    try:
+        img = cam.grab(timeout=10.0)
+    except RuntimeError as e:
+        print('LỖI CAMERA:', e, '-> kiểm tra: rostopic hz', cam.topic)
+        continue
     res = brain.step(img)
     st = res['status']
     if res.get('human_move'):
