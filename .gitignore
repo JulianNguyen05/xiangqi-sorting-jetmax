@@ -8,3 +8,9 @@ models/*.pt
 config/robot.local.yaml
 __pycache__/
 *.pyc
+Nhom2_NopBai.zip
+Nhom2_NopBai/Nhom2_YeuCau1/Nhom2_YeuCau1/
+Nhom2_NopBai/Nhom2_YeuCau2_Demo/xiangqi/engine/
+Nhom2_NopBai/**/models/*.pt
+Nhom2_NopBai/**/models/*.onnx
+.deps_ok

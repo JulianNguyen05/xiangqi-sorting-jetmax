@@ -150,6 +150,21 @@ Trước khi chạy, chương trình in bảng quân + kế hoạch rồi chờ:
 
 Cuối mỗi lần chạy, robot chụp lại và in `KIỂM TRA: đúng x/32 ô, lệch tâm TB ... mm`. Mọi thứ lưu trong `runs/<thời gian>/`.
 
+## 8b. Robot đánh cờ với người (`tools/play.py`)
+
+Thư viện tính nước (XiangqiBrain) + tay máy gắp / đặt. Ô nào **ngoài tầm với** thì robot nói nước đi, người đi giúp.
+
+Cần: mục 4 (tư thế quan sát trong `views`) và mục 5 (hiệu chỉnh camera) đã xong.
+
+```bash
+python3 tools/play.py --hover          # chạy thử: tay chỉ bay tới trên ô gắp / ô đặt, người đi quân
+python3 tools/play.py                  # đánh thật (robot cầm Đen, người đi trước)
+python3 tools/play.py --robot-side red # robot cầm Đỏ, đi trước
+```
+- Quân bị ăn: ghi `play: {drop: [x, y]}` (đo bằng `teleop.py`, phím `p`) vào `robot.local.yaml` để tay máy bỏ ra ngoài; không có thì chương trình nhắc người nhặt.
+- Sau mỗi nước, robot chụp lại kiểm tra quân đã tới đúng ô (`Kiểm tra sau khi đi: khớp`).
+- Biên bản ván + ảnh từng lượt: `runs/play_*.csv`, `runs/play_*_NN.jpg` (số liệu cho báo cáo).
+
 ## 9. Mang kết quả về laptop (cuối buổi)
 
 ```bash

@@ -125,7 +125,8 @@ class XiangqiBrain(object):
     def read_board(self, bgr):
         """Ảnh -> thế cờ (CHƯA dùng luật cờ). Trả về dict:
         board {(f, r): mã} hoặc None, method 'board'/'lattice'/None, pieces (danh sách Piece), n_pieces, n_on_board,
-        enhance {'stats': số đo ảnh, 'steps': các bước tăng cường đã áp dụng}."""
+        enhance {'stats': số đo ảnh, 'steps': các bước tăng cường đã áp dụng},
+        px (chỉ khi method='board') {'grid': {(f, r): (x, y) giao điểm}, 'pieces': {(f, r): (x, y) tâm quân}, 'cell_px'}."""
         from vision import enhance
         t0 = time.time()
         ecfg = self.cfg.get('enhance') or {'mode': 'off'}
@@ -145,9 +146,10 @@ class XiangqiBrain(object):
             self._log('tăng cường ảnh:', ', '.join(einfo['steps']), '->', ', '.join(targets))
         mode = self.cfg['locate']
         if mode in ('auto', 'board'):
+            self._last_px = None
             b = self._by_board_detect(img_board, pts, codes, confs)
             if b is not None:
-                out.update(board=b, method='board')
+                out.update(board=b, method='board', px=self._last_px)
         if out['board'] is None and mode in ('auto', 'lattice') and len(pieces) >= 6:
             from vision import lattice
             b, fit, pl = lattice.image_to_board(pts, codes, confs)
@@ -175,7 +177,7 @@ class XiangqiBrain(object):
         dd = np.linalg.norm(grid[:, None] - grid[None], axis=2)
         np.fill_diagonal(dd, np.inf)
         cell = float(np.median(dd.min(axis=1)))
-        board, best = {}, {}
+        board, best, ppx = {}, {}, {}
         for p, c, cf in zip(pts, codes, confs):
             d = np.linalg.norm(grid - p, axis=1)
             i = int(np.argmin(d))
@@ -183,8 +185,14 @@ class XiangqiBrain(object):
                 continue
             sq = keys[i]
             if sq not in board or cf > best[sq]:
-                board[sq], best[sq] = c, cf
-        return self._fix_orientation(board)
+                board[sq], best[sq], ppx[sq] = c, cf, (float(p[0]), float(p[1]))
+        fixed = self._fix_orientation(board)
+        rot = fixed is not board
+        name = (lambda k: (NF - 1 - k[0], NR - 1 - k[1])) if rot else (lambda k: k)
+        # toạ độ ảnh của 90 giao điểm và của tâm từng quân, đặt tên ô theo đúng hướng thế cờ (cho robot gắp/đặt)
+        self._last_px = {'grid': dict((name(k), (float(v[0]), float(v[1]))) for k, v in pts_px.items()),
+                         'pieces': dict((name(k), v) for k, v in ppx.items()), 'cell_px': cell}
+        return fixed
 
     def _snap_grid(self, pts_px, pts):
         """Lưới tìm từ đường kẻ có thể lệch đúng 1 hàng / 1 cột (đường biên bị quân che, khung viền ngoài bị nhận nhầm

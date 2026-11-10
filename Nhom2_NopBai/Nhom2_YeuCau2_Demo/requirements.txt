@@ -1,0 +1,5 @@
+# Dùng cho các tập lệnh trong src/ (huấn luyện, đánh giá, dự đoán). Python 3.9 - 3.12.
+ultralytics>=8.3.0
+onnx>=1.14
+onnxruntime>=1.16
+opencv-python>=4.8

@@ -1,0 +1,94 @@
+# Cấu hình robot JetMax - GIÁ TRỊ MẶC ĐỊNH. Đơn vị mm, giây.
+# TRÊN ROBOT KHÔNG SỬA FILE NÀY: ghi số đo vào config/robot.local.yaml (ghi đè các mục cùng tên).
+# CÁC SỐ CÓ GHI "ĐO LẠI" phải đo bằng tools/teleop.py khi có robot (xem RUNBOOK.md).
+#
+# Hệ toạ độ:
+#   - ROBOT: toạ độ (x, y, z) của tay máy JetMax như /jetmax/status báo (gốc ở đế robot).
+#   - THẾ GIỚI (world): toạ độ robot khi thanh trượt ở vị trí 0. Mọi điểm trên mặt bàn được lưu trong hệ này.
+#     Khi thanh trượt ở vị trí s bước: robot = world - slider.vec * s.
+
+ros:
+  command: /jetmax/command
+  status: /jetmax/status
+  sucker: /jetmax/end_effector/sucker/command
+  image: /usb_cam/image_rect_color
+  image_is_rgb: true            # usb_cam của Hiwonder trả RGB (code cũ có đổi RGB -> BGR)
+
+home: [0.0, -162.94, 212.8]     # vị trí ban đầu của tay (tư thế lúc bật máy, 3 servo ở giữa); phím h trong teleop
+limits:                         # vùng an toàn của đầu hút (hệ ROBOT). ĐO LẠI: đây là giá trị cũ, khá chặt
+  x: [-120, 120]
+  y: [-230, -100]
+  z: [-15, 225]
+  r_min: 50.0                   # bán kính xy tối thiểu (jetmax bỏ qua lệnh nếu nhỏ hơn)
+  r_max: 280.0                  # bán kính xy tối đa. ĐO LẠI
+
+speed:
+  fast: 60.0                    # mm/s di chuyển ngang
+  slow: 25.0                    # mm/s khi hạ xuống / nâng lên sát quân, và khi lái bằng phím
+  min_time: 1.0                 # s, thời gian tối thiểu mỗi lệnh (lệnh quá gấp làm servo kéo dòng lớn -> sụt nguồn, Jetson khởi động lại)
+  settle: 0.3                   # s chờ thêm sau mỗi lệnh
+  tol: 5.0                      # mm sai lệch cho phép giữa đích và vị trí thực
+
+heights:
+  z_safe: 50.0                  # độ cao di chuyển ngang (quân cao 10 mm)
+  z_pick: -8.0                  # z khi đầu hút chạm MẶT TRÊN quân. tools/calibrate.py tự đo và ghi đè
+  place_gap: 1.5                # thả quân khi đáy quân còn cách mặt bàn bấy nhiêu mm (z_place = z_pick + place_gap)
+  suck_wait: 0.6                # s chờ hút bám chắc
+  release_wait: 0.8             # s chờ xả khí
+
+slider:
+  enabled: true                 # false nếu robot không gắn thanh trượt
+  min: 0
+  max: 5200
+  speed: 800.0                  # bước/s (hãng ghi 1000, để thấp cho chắc)
+  min_z: 40.0                   # chỉ trượt khi tay máy cao hơn mức này
+  vec: [0.0, 0.0]               # mm/bước trong hệ ROBOT. tools/calibrate.py --slider tự đo và ghi đè
+  step_choice: 100              # bước lượng tử khi chọn vị trí trượt
+
+# Tư thế quan sát (tay lên cao nhìn xuống). Mỗi view = vị trí tay máy + vị trí thanh trượt.
+# Nên dùng CÙNG MỘT tư thế tay, chỉ đổi thanh trượt: khi đó chỉ cần hiệu chỉnh camera 1 lần.
+# ĐO LẠI: chọn bằng tools/capture.py sao cho các view phủ hết bàn cờ + vùng chờ.
+views:
+  - name: v0
+    arm: [0.0, -160.0, 210.0]
+    slider: 0
+calib_file: config/calib.yaml   # do tools/calibrate.py sinh ra
+
+play:                           # tools/play.py: robot đánh cờ với người
+  drop: null                    # [x, y] (mm, hệ robot) chỗ bỏ quân bị ăn, trong tầm với. null = người tự nhặt
+
+board:
+  red_near_world: [0.0, 0.0]    # phía Đỏ của bàn cờ là phía gần điểm này (mặc định: đế robot)
+  staging_margin: 12.0          # mm: quân cách viền ngoài lưới hơn mức này mới tính là ở vùng chờ
+
+detector:
+  model: models/best.onnx       # .onnx (onnxruntime / cv2.dnn) hoặc .engine (TensorRT)
+  imgsz: 640
+  conf: 0.35
+  iou: 0.5
+  tta_rotations: [0, 90, 180, 270]
+
+brain:                          # thư viện ảnh -> nước đi (brain/xiangqi_brain.py). Ghi đè trong robot.local.yaml
+  model: models/best.onnx       # tự dùng models/best.engine nếu đã build (install.sh)
+  conf: 0.25                    # ngưỡng tốt nhất đo ở Bước 4 (board_to_fen.ipynb, mục 9)
+  iou: 0.5
+  rotations: [0]                # 1 lần chạy YOLO (Bước 2: mô hình không giảm độ chính xác khi quân xoay)
+  locate: auto                  # board (bàn của đề tài) -> lattice (bàn bất kỳ) nếu không thấy bàn
+  red_hint: null                # [x, y] điểm ảnh gần phía Đỏ; null = cạnh dưới ảnh
+  engine: [engine/pikafish, engine/pikafish.exe, ~/pikafish/pikafish]   # thử lần lượt (.exe: laptop Windows); không có thì engine Python
+  depth: 8                      # chọn lại sau khi chạy tools/bench_engine.py trên robot
+  movetime_ms: null             # đặt số (vd. 2000) để tính theo thời gian thay vì độ sâu
+  threads: 2
+  hash_mb: 64
+  robot_side: b                 # robot cầm Đen, người đi trước
+  max_cost: 2                   # số ô nhận diện sai tối đa còn tự sửa
+  enhance:                      # tăng cường ảnh trước nhận dạng (vision/enhance.py, training/image_preprocessing.ipynb)
+    mode: auto                  # off | auto (đo ảnh, chỉ bật bước cần) | manual (bật đúng các mục dưới)
+    apply_to: [board]           # board: ảnh cho định vị bàn cờ; thêm pieces để dùng cả cho YOLO (chưa đo đủ)
+    denoise: true               # lọc song phương - auto: khi nhiễu > noise_max
+    white_balance: true         # Gray-World      - auto: khi độ ám màu > cast_max
+    clahe: true                 # CLAHE kênh L    - auto: khi độ sáng L < dark_L
+    gamma: null                 # chỉ manual, vd. 0.6 làm sáng ảnh tối
+    noise_max: 4.0
+    cast_max: 1.25
+    dark_L: 100

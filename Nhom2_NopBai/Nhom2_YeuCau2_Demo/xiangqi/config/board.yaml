@@ -1,0 +1,18 @@
+# Bàn cờ đi kèm bộ cờ (tấm nhựa mỏng 36 x 26 cm). Đơn vị: mm.
+# Hệ toạ độ BÀN CỜ: gốc tại giao điểm a0 (cột 0, hàng 0 = góc phía quân Đỏ),
+#   trục u dọc theo hàng ngang (cột a..i, 9 cột), trục v dọc theo cột (hàng 0..9, 10 hàng).
+grid:
+  width: 220.0        # từ đường dọc ngoài cùng trái -> phải (8 khoảng)
+  length: 300.0       # từ đường ngang trên cùng -> dưới cùng (9 khoảng, tính cả sông)
+  river: 30.0         # khoảng cách 2 đường ngang hai bên sông
+sheet:
+  margin_side: 20.0   # đường lưới -> mép tấm, 2 cạnh dài
+  margin_end: 30.0    # đường lưới -> mép tấm, 2 cạnh ngắn
+border:
+  # Khung viền đỏ: khoảng cách từ MÉP NGOÀI khung viền tới đường lưới ngoài cùng.
+  # Ước lượng từ ảnh (~10 mm); thuật toán chỉ dùng số này để đoán ban đầu rồi tự tinh chỉnh theo đường lưới,
+  # nên sai vài mm vẫn chạy. Đo bằng thước thì điền lại cho chính xác.
+  offset: 10.0
+piece:
+  diameter: 25.0
+  height: 10.0

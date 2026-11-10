@@ -88,6 +88,12 @@ if not a.camera:
 # ------------------------------------------------------------------ chơi cả ván bằng camera robot
 print('Robot cầm %s. Người đi quân của mình rồi nhấn Enter; robot chỉ NÓI nước đi, bạn đi giúp robot.'
       % ('Đen' if brain.game.robot_side == R.BLACK else 'Đỏ'))
+turn = 0
+os.makedirs(os.path.join(ROOT, 'runs'), exist_ok=True)
+log_path = os.path.join(ROOT, 'runs', 'game_%s.csv' % time.strftime('%Y%m%d_%H%M%S'))
+with open(log_path, 'w') as fh:
+    fh.write('luot,gio,trang_thai,nguoi_di,so_o_sua,robot_di,so_quan,tong_ms,yolo_ms,dinh_vi_ms,engine_ms,quan_tren_ban,dinh_vi\n')
+print('Ghi biên bản:', log_path)
 while not rospy.is_shutdown():
     if input('\nEnter = chụp, q = thoát: ').strip().lower() == 'q':
         break
@@ -96,8 +102,25 @@ while not rospy.is_shutdown():
     except RuntimeError as e:
         print('LỖI CAMERA:', e, '-> kiểm tra: rostopic hz', cam.topic)
         continue
+    t0 = time.time()
     res = brain.step(img)
+    total = (time.time() - t0) * 1000
     st = res['status']
+    rd = res.get('read') or {}
+    tt = rd.get('times', {})
+    think = (res.get('robot_move') or {}).get('think_ms') or 0
+    est = (rd.get('enhance') or {}).get('steps') or []
+    print('Thời gian    : tổng %.0f ms (YOLO %.0f, định vị bàn %.0f, tăng cường %.0f, engine %.0f) | %d quân, định vị: %s%s' % (
+        total, tt.get('detect_ms', 0), tt.get('locate_ms', 0), tt.get('enhance_ms', 0), think,
+        rd.get('n_pieces', 0), rd.get('method'), (', tăng cường: ' + ','.join(est)) if est else ''))
+    turn += 1
+    hm = res.get('human_move') or {}
+    rm = res.get('robot_move') or {}
+    with open(log_path, 'a') as fh:
+        fh.write('%d,%s,%s,%s,%s,%s,%d,%.0f,%.0f,%.0f,%.0f,%d,%s\n' % (
+            turn, time.strftime('%H:%M:%S'), st, hm.get('uci', ''), hm.get('corrected', ''), rm.get('uci', ''),
+            rd.get('n_pieces', 0), total, tt.get('detect_ms', 0), tt.get('locate_ms', 0), think,
+            len(rd.get('board') or {}), rd.get('method') or ''))
     if res.get('human_move'):
         print('Người vừa đi : %s (sửa %d ô)' % (res['human_move']['vn'], res['human_move']['corrected']))
     if st == 'robot_move':

@@ -109,6 +109,7 @@ class Robot(object):
         self.r_min, self.r_max = float(lim['r_min']), float(lim.get('r_max', 1e9))
         sp = cfg['speed']
         self.fast, self.slow, self.settle, self.tol = sp['fast'], sp['slow'], sp['settle'], sp['tol']
+        self.min_time = float(sp.get('min_time', 1.0))   # mỗi lệnh ít nhất bấy nhiêu giây: servo tăng tốc êm, không sụt nguồn
         h = cfg['heights']
         self.z_safe = float(h['z_safe'])
         self.z_pick = float((calib or {}).get('z_pick', h['z_pick']))
@@ -165,7 +166,7 @@ class Robot(object):
             raise MoveError('Điểm robot (%.1f, %.1f, %.1f) ngoài giới hạn an toàn' % p)
         cur = self.b.status()
         dist = math.sqrt(sum((p[i] - cur[i]) ** 2 for i in range(3)))
-        t = max(0.4, dist / (speed or self.fast))
+        t = max(self.min_time, dist / (speed or self.fast))
         self.b.move(p, t)
         self.b.sleep(t + self.settle)
         now = self.b.status()

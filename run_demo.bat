@@ -2,6 +2,7 @@
 REM Demo thu vien co tuong tren laptop Windows. Bam dup file nay.
 chcp 65001 >nul
 set PYTHONUTF8=1
+if defined SSL_CERT_FILE if not exist "%SSL_CERT_FILE%" set "SSL_CERT_FILE="
 cd /d "%~dp0"
 where py >nul 2>nul && (set PY=py -3) || (set PY=python)
 if not exist .deps_ok (

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Điều khiển tay máy bằng bàn phím (dùng chung cho tools/teleop.py và tools/calibrate.py).
 # Phím:  d/a = x +/-   w/s = y +/-   r/f = z +/-   x/z = thanh trượt tiến/lùi   v = bật/tắt hút
-#        t = đổi mức bước   CHỮ HOA = bước x4   p = in trạng thái   Enter = ghi điểm (khi được hỏi)   q = thoát
+#        h = về vị trí ban đầu (home, lúc bật máy)   t = đổi mức bước   CHỮ HOA = bước x4   p = in trạng thái
+#        Enter = ghi điểm (khi được hỏi)   q = thoát
 # Chạy trong terminal của robot (SSH / VNC). Mọi lệnh đi qua robot.motion.Robot nên vẫn kiểm tra giới hạn an toàn.
 
 import select
@@ -12,8 +13,10 @@ import tty
 MM_STEPS = [1, 5, 10, 20]                 # mm (bước 1 mm để căn tâm quân khi hiệu chỉnh)
 SLIDER_STEPS = [100, 500, 1000, 2000]
 
-HELP = """  d/a: x+/-   w/s: y+/-   r/f: z+/-   x/z: trượt tiến/lùi   v: hút bật/tắt
+HELP = """  d/a: x+/-   w/s: y+/-   r/f: z+/-   x/z: trượt tiến/lùi   v: hút bật/tắt   h: về vị trí ban đầu
   t: đổi mức bước   CHỮ HOA: bước x4   p: in vị trí   Enter: GHI ĐIỂM   q: thoát/bỏ qua"""
+
+HOME = (0.0, -162.94, 212.8)              # tư thế lúc bật máy (3 servo ở giữa); ghi đè bằng home: [x, y, z] trong config
 
 
 class Jogger(object):
@@ -34,7 +37,24 @@ class Jogger(object):
             self.log('  Ngoài giới hạn an toàn, không đi')
             return
         try:
-            self.robot.goto(p, speed=150.0)
+            self.robot.goto(p, speed=self.robot.slow)      # chậm: tránh sụt nguồn khi servo vai / khuỷu chịu tải
+        except Exception as e:
+            self.log('  %s' % e)
+        self.show()
+
+    def home(self):
+        """Về vị trí ban đầu: tắt hút, chạy CHẬM thẳng tới tư thế home."""
+        p = tuple(float(v) for v in (self.robot.cfg.get('home') or HOME))
+        if self.suck:
+            self.suck = False
+            self.robot.b.sucker(False)
+        self.log('  Về vị trí ban đầu (%.1f, %.1f, %.1f)...' % p)
+        x, y, z = self.robot.status()
+        d = ((p[0] - x) ** 2 + (p[1] - y) ** 2 + (p[2] - z) ** 2) ** 0.5
+        t = max(2.0, d / float(self.robot.slow))
+        try:
+            self.robot.b.move(p, t)                  # lệnh trực tiếp: home có thể nằm ngoài 'limits' (khá chặt)
+            self.robot.b.sleep(t + self.robot.settle)
         except Exception as e:
             self.log('  %s' % e)
         self.show()
@@ -83,6 +103,8 @@ class Jogger(object):
                     self.suck = not self.suck
                     self.robot.b.sucker(self.suck)
                     self.show()
+                elif k == 'h':
+                    self.home()
                 elif k == 't':
                     self.level = (self.level + 1) % len(MM_STEPS)
                     self.show()
